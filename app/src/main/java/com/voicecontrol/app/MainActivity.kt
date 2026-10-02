@@ -26,19 +26,17 @@ import android.widget.TextView
 /** 会话状态：供前台服务与界面之间共享（同一进程内的简单单例） */
 object SessionState {
 
-    /** 会话阶段（主页状态卡四态驱动，v0.31.0） */
-    enum class Phase { IDLE, LISTENING, EXECUTING, DONE, FAIL }
+    /** 2026-10-03：主页只显示会话开关，单条命令反馈由胶囊和使用记录承接。 */
+    enum class Phase { IDLE, LISTENING }
 
     @Volatile var lastText: String = ""
 
-    /** 最近一次执行结果；setter 中央挂钩 → 使用记录（零散布点）+ phase 推进 */
+    /** 最近一次执行结果；setter 中央挂钩 → 使用记录，独立于主页会话显示。 */
     var lastMatch: String = ""
         set(value) {
             field = value
             if (value.isNotBlank()) {
                 UsageLog.append(value)
-                phase = if (value.contains("无障碍已关闭") || value.contains("被拒绝")) Phase.FAIL
-                        else Phase.DONE
             }
         }
 
@@ -61,19 +59,15 @@ class MainActivity : ThemedActivity() {
     // 从电池优化/自启动授权页返回后，是否要自动续接启动链（推进到下一环）
     private var pendingChainResume = false
 
-    // 主页状态卡视图（onCreate 绑定后使用）；statusLogo 是自绘 LogoCircleView，按 View 持有
+    // 主页只切换未启动/会话中两张卡，不再逐句展示执行状态。
     private lateinit var heroIdle: View
     private lateinit var heroStatus: View
-    private lateinit var statusLogo: View
-    private lateinit var pbExec: View
-    private lateinit var statusDone: ImageView
-    private lateinit var statusFail: ImageView
-    private lateinit var statusTitle: TextView
-    private lateinit var statusHint: TextView
+    private var renderedIdle: Boolean? = null
     private lateinit var heroLogo: LogoCircleView   // 未启动卡的圆形（v0.55.6 水波涟漪载体）
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        RetiredAudioFiles.clean(applicationContext)
         UsageLog.init(applicationContext)
         CrashCatcher.register(applicationContext)   // 崩溃记录器（v0.43.0，幂等）
         setContentView(R.layout.activity_main)
@@ -83,13 +77,6 @@ class MainActivity : ThemedActivity() {
         // 英雄区双态
         heroIdle = findViewById(R.id.hero_idle)
         heroStatus = findViewById(R.id.hero_status)
-        statusLogo = findViewById(R.id.iv_status_logo)
-        statusLogo = findViewById(R.id.iv_status_logo)
-        pbExec = findViewById(R.id.pb_exec)
-        statusDone = findViewById(R.id.iv_status_done)
-        statusFail = findViewById(R.id.iv_status_fail)
-        statusTitle = findViewById(R.id.tv_status_title)
-        statusHint = findViewById(R.id.tv_status_hint)
 
         // v0.56.4：双态英雄卡高度对齐。状态卡多一颗「结束」按钮，天然比未启动卡高一截，
         // 切换瞬间卡片会跳一下。首次布局后按较高一态给两卡定高（按像素定，随系统字号自适应，
@@ -145,9 +132,6 @@ class MainActivity : ThemedActivity() {
             }, 140L)
         }
 
-        // 测试期间保持亮屏，方便观察识别结果
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), PERMISSION_REQUEST)
         } else if (!isBatteryOptimizationIgnored()) {
@@ -168,10 +152,10 @@ class MainActivity : ThemedActivity() {
         }
     }
 
-    // 主页状态卡轮询：500ms 读 SessionState.phase 刷新四态视图（仅前台运行）
+    // 仅前台检查会话开关；状态没变时不修改视图，后台停止轮询。
     private val statusPoll = object : Runnable {
         override fun run() {
-            renderPhase(SessionState.phase)
+            renderSessionCard(SessionState.phase)
             handler.postDelayed(this, 500)
         }
     }
@@ -186,37 +170,16 @@ class MainActivity : ThemedActivity() {
         handler.removeCallbacks(statusPoll)
     }
 
-    /** 按会话阶段切换英雄区视图（IDLE=开始控制卡；其余四态在状态卡内切换） */
-    private fun renderPhase(p: SessionState.Phase) {
+    /** 2026-10-03 用户要求移除命令完成展示；只在会话开始/结束时切卡。 */
+    private fun renderSessionCard(p: SessionState.Phase) {
         val idle = p == SessionState.Phase.IDLE
+        if (renderedIdle == idle) return
+        renderedIdle = idle
         heroIdle.visibility = if (idle) View.VISIBLE else View.GONE
         heroStatus.visibility = if (idle) View.GONE else View.VISIBLE
         if (idle) return
-        // 非 IDLE = 会话已建立：涟漪使命完成（水波表示「等待启动」，IDLE 态的启停在 tryStartSession 管）
+        // 会话建立后结束启动等待涟漪，卡片保持「正在聆听」。
         heroLogo.stopWaitingRipple()
-        statusLogo.visibility = if (p == SessionState.Phase.LISTENING) View.VISIBLE else View.GONE
-        pbExec.visibility = if (p == SessionState.Phase.EXECUTING) View.VISIBLE else View.GONE
-        statusDone.visibility = if (p == SessionState.Phase.DONE) View.VISIBLE else View.GONE
-        statusFail.visibility = if (p == SessionState.Phase.FAIL) View.VISIBLE else View.GONE
-        when (p) {
-            SessionState.Phase.LISTENING -> {
-                statusTitle.text = "正在聆听"
-                statusHint.text = "请说出指令"
-            }
-            SessionState.Phase.EXECUTING -> {
-                statusTitle.text = "正在执行"
-                statusHint.text = "请稍候"
-            }
-            SessionState.Phase.DONE -> {
-                statusTitle.text = "已完成"
-                statusHint.text = SessionState.lastMatch.removePrefix("→ ").trim()
-            }
-            SessionState.Phase.FAIL -> {
-                statusTitle.text = "未执行"
-                statusHint.text = SessionState.lastMatch.removePrefix("→ ").trim()
-            }
-            SessionState.Phase.IDLE -> {}
-        }
     }
 
     /** 触感反馈（v0.55.10）：点「开始控制」时短震一下，跟随设置页「震动反馈」开关（与 VoiceService 执行指令震感同参数） */
@@ -232,7 +195,7 @@ class MainActivity : ThemedActivity() {
     }
 
     /** 点「开始会话」入口：录音权限 → 无障碍自检 → 静默自愈/弹引导 → 开会话 */
-    private fun tryStartSession() {        heroLogo.startWaitingRipple()   // v0.55.6：水波涟漪=启动等待中，会话建立（renderPhase 切卡）即停
+    private fun tryStartSession() {        heroLogo.startWaitingRipple()   // v0.55.6：水波涟漪=启动等待中，会话建立（renderSessionCard 切卡）即停
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), PERMISSION_REQUEST)
             heroLogo.stopWaitingRipple()

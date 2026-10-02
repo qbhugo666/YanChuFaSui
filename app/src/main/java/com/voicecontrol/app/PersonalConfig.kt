@@ -26,6 +26,17 @@ object PersonalConfig {
     /** 指令条数防御上限（正常用户 <20 条） */
     private const val MAX_BINDINGS = 300
 
+    /**
+     * 布尔偏好安全读取（2026-09-29 收尾项1）：仅当 JSON 值**确实是布尔**才返回它；
+     * 字段缺失或类型错误（字符串"true"/数字1/null）一律返回 null = 调用方保持现值不动。
+     * 旧代码 optBoolean(key, false) 会把类型错误悄悄当成 false 落盘——用户开着的功能
+     * 被一份坏备份无声关闭。纯函数可 JVM 单测（PersonalConfigTest）。
+     */
+    internal fun booleanOrNull(prefs: JSONObject, key: String): Boolean? = when (val v = prefs.opt(key)) {
+        is Boolean -> v
+        else -> null
+    }
+
     /** 导入结果计数（给用户的汇报素材） */
     data class ImportCounts(
         val bindings: Int,
@@ -121,15 +132,19 @@ object PersonalConfig {
                 okPrefs++
             }
             if (prefsIn.has("vibrate_feedback")) {
-                context.getSharedPreferences("app", Context.MODE_PRIVATE).edit()
-                    .putBoolean("vibrate_feedback", prefsIn.optBoolean("vibrate_feedback")).apply()
-                okPrefs++
+                // 类型错误不导入（booleanOrNull），保持现值——坏备份不得无声改用户设置
+                booleanOrNull(prefsIn, "vibrate_feedback")?.let { v ->
+                    context.getSharedPreferences("app", Context.MODE_PRIVATE).edit()
+                        .putBoolean("vibrate_feedback", v).apply()
+                    okPrefs++
+                }
             }
             val sens = prefsIn.optInt("sensitivity_level", -1)
             if (sens in RecognitionSensitivity.MIN_LEVEL..RecognitionSensitivity.MAX_LEVEL) {
                 RecognitionSensitivity.save(context, sens)
                 okPrefs++
             }
+            // 2026-10-03：声音二审已移除，旧备份的 enhanced_decision_enabled 不再导入。
         }
         return ImportCounts(okBindings, okVocab, okPrefs, skipped)
     }

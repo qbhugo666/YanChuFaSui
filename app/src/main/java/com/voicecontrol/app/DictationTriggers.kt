@@ -56,6 +56,14 @@ fun isDictationTrigger(text: String): Boolean {
     return CORE_TRIGGERS.any { nearSyllables(t, syllablesOf(it)) }
 }
 
+/**
+ * 听写武装综合判定（2026-09-29 收尾项3，生产唯一入口）：触发词/容差命中 **且** 整句不是
+ * 在册命令（v0.57.12 用户拍板「删除是正式命令，绝不能因近音被听写抢走」——matchExact 整词
+ * 精确命中者永远按命令走）。纯函数，与 VoiceService 委托同一实现，JVM 可测。
+ */
+fun shouldArmDictation(text: String, matcher: CommandMatcher): Boolean =
+    isDictationTrigger(text) && matcher.matchExact(text) == null
+
 /** 听写内容句中可直接生效的文字编辑命令词（v0.56.25）：按编辑执行，不作为文字落笔。
  *  治连环坑：说「删除」被听成「输入」进了听写，再说「删除」又被打成本字。 */
 val TEXT_EDIT_WORDS = setOf(

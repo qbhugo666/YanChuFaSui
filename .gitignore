@@ -43,3 +43,13 @@ reports/
 *.iml
 captures/
 internal-docs/ 
+
+# 录音与本机二审实验元数据不得进入公开仓库
+*.wav
+*.mp3
+*.m4a
+*.pcm
+app/src/main/assets/*_meta.json
+app/src/main/assets/libonnxruntime_120_*.so
+# 本机接手说明包含设备和个人情况，保留本地使用。
+/AGENTS.md

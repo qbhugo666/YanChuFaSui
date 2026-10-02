@@ -22,6 +22,7 @@ class UsageActivity : ThemedActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         UsageLog.init(applicationContext)
+        pruneFeedbackFiles()
         setContentView(R.layout.activity_usage)
 
         findViewById<View>(R.id.btn_back).setOnClickListener { finish() }
@@ -40,12 +41,23 @@ class UsageActivity : ThemedActivity() {
 
         // 导出反馈（v0.36.0）：版本/设备/使用记录/应用日志 打包成文本，走系统分享发给开发者
         findViewById<View>(R.id.btn_export).setOnClickListener {
-            val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
-                type = "text/plain"
-                putExtra(android.content.Intent.EXTRA_SUBJECT, "言出法随 问题反馈")
-                putExtra(android.content.Intent.EXTRA_TEXT, buildReport())
-            }
             runCatching {
+                val report = buildReport()
+                val send = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_SUBJECT, "言出法随 问题反馈")
+                    if (FeedbackSharePolicy.needsFile(report)) {
+                        val dir = java.io.File(cacheDir, "speech_feedback").apply { mkdirs() }
+                        val name = "speech-feedback-${java.util.UUID.randomUUID().toString().replace("-", "")}.txt"
+                        java.io.File(dir, name).writeText(report, Charsets.UTF_8)
+                        val uri = android.net.Uri.Builder().scheme("content").authority("$packageName.feedback").appendPath(name).build()
+                        putExtra(Intent.EXTRA_STREAM, uri)
+                        putExtra(Intent.EXTRA_TEXT, "言出法随完整反馈见附件（含使用记录和诊断信息，不含录音）")
+                        clipData = android.content.ClipData.newRawUri("问题反馈", uri)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        pruneFeedbackFiles()
+                    } else putExtra(Intent.EXTRA_TEXT, report)
+                }
                 startActivity(android.content.Intent.createChooser(send, "把反馈信息发送给开发者"))
             }.onFailure {
                 Toast.makeText(this, "打不开分享，请稍后再试", Toast.LENGTH_SHORT).show()
@@ -53,6 +65,14 @@ class UsageActivity : ThemedActivity() {
         }
 
         render()
+    }
+
+    private fun pruneFeedbackFiles() {
+        val dir = java.io.File(cacheDir, "speech_feedback")
+        val files = dir.listFiles()?.filter { it.isFile && FeedbackSharePolicy.validFilename(it.name) }
+            ?.sortedByDescending { it.lastModified() }.orEmpty()
+        val cutoff = System.currentTimeMillis() - FeedbackSharePolicy.RETENTION_MS
+        files.forEachIndexed { i, file -> if (i >= FeedbackSharePolicy.MAX_FILES || file.lastModified() < cutoff) file.delete() }
     }
 
     /** 组装问题反馈文本：设备环境 + 内存画像 + 崩溃记录 + 使用记录 + 应用日志 + 系统错误日志 */
@@ -74,16 +94,19 @@ class UsageActivity : ThemedActivity() {
         val crashes = CrashCatcher.dumpAll(this)
         sb.appendLine(crashes ?: "（无崩溃记录）")
         sb.appendLine()
-        sb.appendLine("---- 使用记录（最近在前；你说了=识别原文，箭头行=执行结果）----")
+        sb.appendLine("---- 使用记录（最近在前；机器听到=ASR 转写原文，箭头行=执行结果）----")
         val all = UsageLog.all()
         if (all.isEmpty()) {
             sb.appendLine("（无记录）")
         } else {
             val f = SimpleDateFormat("MM-dd HH:mm:ss", Locale.CHINA)
             all.asReversed().forEach { e ->
-                sb.appendLine("${f.format(Date(e.time))}  ${e.text.ifBlank { "（未触发操作）" }}${if (e.heard.isNotBlank()) "  ｜原文：${e.heard}" else ""}")
+                sb.appendLine("${f.format(Date(e.time))}  ${e.text.ifBlank { "（未触发操作）" }}${if (e.heard.isNotBlank()) "  ｜原文：${e.heard}" else ""}${if (e.decisionLabel.isNotBlank()) "  ｜复核：${e.decisionLabel}" else ""}${if (e.audioDecision.isNotBlank()) "  ｜二审详情：${e.audioDecision}" else ""}")
             }
         }
+        sb.appendLine()
+        sb.appendLine("---- 高频二审账目（用户标记的意图；未标记不计正确率；不含录音或声学特征）----")
+        sb.appendLine(SpeechAudit.export(all).toString())
         sb.appendLine()
         sb.appendLine("---- 诊断事件（关键事件环形缓冲，logcat 被冲掉后的真相来源）----")
         sb.appendLine(DiagnosticsHelper.dumpEvents())
@@ -136,13 +159,32 @@ class UsageActivity : ThemedActivity() {
                 setTextColor(getColor(R.color.text_secondary))
                 setPadding(dp(4), dp(12), dp(4), 0)
             })
-            // 识别原文（v0.57.0）：机器听到的话——旧记录没有此字段则跳过
+            // 识别原文（v0.57.0）：机器听到的话——旧记录没有此字段则跳过。
+            // v0.58 措辞修正（M5）：原文是 ASR 机器转写的猜测，不是用户亲口确认的话——
+            // 写「机器听到」避免误导排查
             if (e.heard.isNotBlank()) {
                 container.addView(TextView(this).apply {
-                    text = "你说了：${e.heard}"
+                    text = "机器听到：${e.heard}"
                     textSize = 13f
                     setTextColor(getColor(R.color.text_secondary))
                     setPadding(dp(4), dp(1), dp(4), 0)
+                })
+            }
+            // 声音复核处置（v0.58 M5）：普通列表只显示用户可读短标签；
+            // 置信度/耗时等专业详情见导出反馈的「二审详情」。旧记录只有详情串时降级显示详情
+            if (e.decisionLabel.isNotBlank()) {
+                container.addView(TextView(this).apply {
+                    text = "二审：${AudioDecisionRouting.displayLabel(e.decisionLabel, e.audioDecision)}"
+                    textSize = 11f
+                    setTextColor(getColor(R.color.text_secondary))
+                    setPadding(dp(4), dp(1), dp(4), dp(1))
+                })
+            } else if (e.audioDecision.isNotBlank()) {
+                container.addView(TextView(this).apply {
+                    text = "增强识别：${e.audioDecision}"
+                    textSize = 11f
+                    setTextColor(getColor(R.color.text_secondary))
+                    setPadding(dp(4), dp(1), dp(4), dp(1))
                 })
             }
             // 执行结果；heard 有值而 text 为空 = 这句话没触发任何操作（语气词/未命中）
@@ -159,6 +201,17 @@ class UsageActivity : ThemedActivity() {
                 }
                 setPadding(dp(4), dp(1), dp(4), dp(2))
             })
+            if (e.uid.isNotBlank() && e.heard.isNotBlank()) {
+                SpeechAudit.intentLabel(e.confirmedIntent)?.let { label ->
+                    container.addView(TextView(this).apply {
+                        val effect = SpeechAudit.ObservedEffect.entries.firstOrNull { it.name == e.observedEffect }?.label
+                        text = "我的本意：$label${effect?.let { " · $it" }.orEmpty()}"
+                        textSize = 12f
+                        setTextColor(getColor(R.color.text_secondary))
+                        setPadding(dp(4), dp(2), dp(4), 0)
+                    })
+                }
+            }
         }
     }
 }

@@ -67,7 +67,8 @@ open class VoiceControlService : AccessibilityService() {
         private const val TAP_DURATION_MS = 60L
 
         // 长按手势时长（毫秒）：同一点按住不动，系统识别为长按
-        private const val LONG_PRESS_DURATION_MS = 650L
+        // 长按手势时长：2026-09-30 起公开——VoiceService 的重复回放间隔以它为安全串行依据
+        const val LONG_PRESS_DURATION_MS = 650L
 
         // 双击两次点击之间的间隔（毫秒）
         private const val DOUBLE_TAP_GAP_MS = 80L
@@ -75,6 +76,19 @@ open class VoiceControlService : AccessibilityService() {
         // 网格：列数 × 行数（竖屏 3×4 = 12 格）
         const val GRID_COLS = 3
         const val GRID_ROWS = 4
+
+        /**
+         * 网格第 number 格中心的**归一化**坐标（相对当前网格区域，0~1）——生产共用几何来源。
+         * 2026-09-30 网格误点修复：doTapGridCell/doLongPressGridCell 的行号此前误用
+         * GRID_ROWS(4)——3 列网格按行填充，进位应是列数 GRID_COLS(3)；旧行号让「点击第 4 格」
+         * 落到第一行第一列（=第 1 格位置）的真机误点。doZoomGrid 一直用 GRID_COLS（正确，
+         * 未动），点击/长按格与它对齐。纯函数（无 Android 依赖），JVM 全格验证 1~12。
+         */
+        fun gridCellCenterNormalized(number: Int, cols: Int = GRID_COLS, rows: Int = GRID_ROWS): Pair<Float, Float> {
+            val col = (number - 1) % cols
+            val row = (number - 1) / cols   // 按行填充：行进位 = 列数（不是行数）
+            return (col + 0.5f) / cols to (row + 0.5f) / rows
+        }
 
         // 网格缩放最大层级（全屏算第 1 层，最多缩到第 6 层 = 缩 5 次，到手指精度为止）
         const val MAX_GRID_LEVEL = 6
@@ -156,6 +170,18 @@ open class VoiceControlService : AccessibilityService() {
             return svc.hasVisibleEditable()
         }
 
+        /** 光标声音救回资格：只读焦点，不会主动聚焦页面上的任意搜索框。 */
+        internal fun hasFocusedEditableForCursor(): Boolean {
+            val n = instance?.focusedCursorNode() ?: return false
+            return try { true } finally { runCatching { n.recycle() } }
+        }
+
+        internal fun executeRecoveredCursor(action: String): Boolean = when (action) {
+            "text_cursor_left" -> instance?.moveFocusedCursor(-1) ?: false
+            "text_cursor_right" -> instance?.moveFocusedCursor(1) ?: false
+            else -> false
+        }
+
         /** 输入框文本操作探针（开发期诊断，商用前移除） */
         fun textProbe(): Boolean {
             val svc = instance ?: return false
@@ -180,9 +206,18 @@ open class VoiceControlService : AccessibilityService() {
             return svc.doTapText(target)
         }
 
+        internal fun tapTextDetailed(target: String): SilentCommandRecovery.TextTapStatus =
+            instance?.doTapTextDetailed(target) ?: SilentCommandRecovery.TextTapStatus.UNAVAILABLE
+
         // 最近一次文字点击的落点（v0.55）：供「重复一次」复点同一位置；仅成功时写入
         @Volatile
         var lastTextTapPoint: Pair<Float, Float>? = null
+
+        // 最近一次长按（编号/文字/屏幕中心）的落点（2026-09-30）：长按类动作成功后
+        // 「重复一次」回放同一点位——此前长按编号/文字/待命成功后不登记，重复会误放
+        // 更早的动作。与 lastTextTapPoint 同款「目标确定即登记」语义。
+        @Volatile
+        var lastLongPressPoint: Pair<Float, Float>? = null
 
         /** 长按第 number 个可点击元素（编号模式：显示编号后说「长按 1」） */
         fun longPressLabel(number: Int): Boolean {
@@ -211,11 +246,10 @@ open class VoiceControlService : AccessibilityService() {
             return svc.doZoomGrid(number)
         }
 
-        /** 点击当前网格中心（定位完成后真正点击） */
+        /** 点击当前网格中心（定位完成后真正点击）：主线程同步派发，返回=手势派发结果 */
         fun tapGridCenter(): Boolean {
             val svc = instance ?: return false
-            svc.doTapGridCenter()
-            return true
+            return svc.doTapGridCenter()
         }
 
         /** 点击第 number 格（网格模式一步式点击，不是缩放） */
@@ -269,6 +303,16 @@ open class VoiceControlService : AccessibilityService() {
 
         /** 编号浮层是否正在显示（供识别层判断：显示中纯数字直接点编号） */
         fun isLabelsVisible(): Boolean = instance?.labelsVisible == true
+
+        /** 与屏幕绘制和 labelCenter 执行共用同一份快照，不为候选恢复另行遍历页面。 */
+        fun visibleLabelCount(): Int? = instance?.let { svc ->
+            if (svc.labelsVisible && svc.labelsOverlayView != null && svc.labelRects.isNotEmpty())
+                svc.labelRects.size else null
+        }
+
+        /** 不重新遍历目标；识别线程读取主线程发布的不可变绘制快照。 */
+        internal fun numberReviewSnapshot(): NumberReviewContext.Snapshot? =
+            instance?.let { if (it.labelsVisible) it.numberSnapshot else null }
     }
 
     private var windowManager: WindowManager? = null
@@ -276,12 +320,13 @@ open class VoiceControlService : AccessibilityService() {
     private var labelsOverlayView: View? = null
     private var gridOverlayView: View? = null
     private val gridStack = mutableListOf<RectF>()  // 网格缩放栈（归一化比例 0~1），末位=当前区域
-    private var labelsVisible = false
+    @Volatile private var labelsVisible = false
 
     // 「显示编号」快照：屏幕上画着的编号 → 元素屏幕矩形。点击/长按优先按它定位——
     // 所见即所点。2026-09-14 抖音真机实锤：信息流元素实时增删，点时重新遍历会错位/越界
     // （显示时 25+ 个、53 秒后只剩 8 个 → 明明画着 28 号却报「没有编号」）
     private var labelRects: List<Rect> = emptyList()
+    @Volatile private var numberSnapshot: NumberReviewContext.Snapshot? = null
 
     // 动作附加提示（音量上限、桌面不支持摇移等），由 performAction/nudgeCommand 写入、
     // 识别层经 consumeActionNote 取走并清空
@@ -330,6 +375,7 @@ open class VoiceControlService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        RetiredAudioFiles.clean(applicationContext)
         instance = this
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         // 订阅滚动事件：v0.23 起滚动校验依赖 TYPE_VIEW_SCROLLED 事件流（系统级真相），
@@ -739,6 +785,52 @@ open class VoiceControlService : AccessibilityService() {
         actionNote = null
         Log.i(TAG, "TEXT_CURSOR $cur->$target/$len ok=$ok")
         return ok
+    }
+
+    private fun cursorFacts(n: AccessibilityNodeInfo) = CursorExecutionGuard.Facts(
+        n.isEditable,n.isVisibleToUser,n.isFocused,n.isEnabled,n.text?.length ?: 0,
+        n.textSelectionStart,n.textSelectionEnd)
+
+    /** 2026-09-30：新声学动作不能复用“页面第一个输入框”的宽松查找。故障/选区不明即拒绝。 */
+    private fun focusedCursorNode(): AccessibilityNodeInfo? {
+        val root = rootInActiveWindow ?: return null
+        var focus: AccessibilityNodeInfo? = null
+        try {
+            focus = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            if (focus != null && CursorExecutionGuard.usable(cursorFacts(focus))) return focus
+        } catch (error: Exception) {
+            Log.w(TAG,"声音光标焦点不可用",error)
+        } finally {
+            if (root !== focus) runCatching { root.recycle() }
+        }
+        runCatching { focus?.recycle() }
+        return null
+    }
+
+    /** 派发前再次检查同一套焦点条件；不 SET_TEXT、不 ACTION_FOCUS、不重试。 */
+    private fun moveFocusedCursor(direction: Int): Boolean {
+        val n = focusedCursorNode() ?: run { actionNote="未找到已聚焦的输入框"; return false }
+        return try {
+            val f = cursorFacts(n)
+            val target = CursorExecutionGuard.next(f,direction) ?: run {
+                actionNote="光标已在边界或位置不可用"
+                return false
+            }
+            val args = android.os.Bundle().apply {
+                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT,target)
+                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT,target)
+            }
+            val ok = n.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION,args)
+            actionNote = if (ok) null else "光标移动未派发"
+            Log.i(TAG,"RECOVERED_CURSOR ${f.start}->$target/${f.length} ok=$ok")
+            ok
+        } catch (error: Exception) {
+            Log.w(TAG,"声音光标执行失败",error)
+            actionNote="光标移动未派发"
+            false
+        } finally {
+            runCatching { n.recycle() }
+        }
     }
 
     /** 删除光标前一个字符（无光标信息视为末尾）；空文本提示 */
@@ -1314,27 +1406,17 @@ open class VoiceControlService : AccessibilityService() {
         return (dm.widthPixels / 2f) to (dm.heightPixels / 2f)
     }
 
-    /** 网格模式点击后收尾：清空缩放栈、移除网格浮层（非网格模式下是空操作） */
-    private fun finishGridTap() {
-        if (gridStack.isNotEmpty()) {
-            gridStack.clear()
-            removeGridOverlay()
-        }
-    }
-
     /** 双击：与「轻点」同位置，连续点两次 */
     private fun doDoubleTap() {
         val (x, y) = currentTapPoint() ?: return
         tapAt(x, y)
         mainHandler.postDelayed({ tapAt(x, y) }, DOUBLE_TAP_GAP_MS)
-        finishGridTap()
     }
 
     /** 长按：与「轻点」同位置，按住不动约 0.65 秒 */
     private fun doLongPress() {
         val (x, y) = currentTapPoint() ?: return
         longPressAt(x, y)
-        finishGridTap()
     }
 
     // ===== 编号网格（第①步：元素编号） =====
@@ -1462,6 +1544,13 @@ open class VoiceControlService : AccessibilityService() {
         val rects = nodes.map {
             val r = Rect(); it.getBoundsInScreen(r); r
         }
+        val reviewSnapshot = NumberReviewContext.Snapshot(root.windowId,
+            root.packageName?.toString().orEmpty(), nodes.mapIndexed { index, node ->
+                val r = rects[index]
+                // 同数量换页/同位置换目标也不兼容；稳定重画保留相等值。
+                listOf(node.viewIdResourceName, node.className, node.text, node.contentDescription,
+                    "${r.left},${r.top},${r.right},${r.bottom}").joinToString("\u001f")
+            })
         labelRetryCount = 0
         // 指纹与上次相同（页面稳定）→ 不重画；不同（切页/滚动）→ 重画并安排一次落定复查
         val sig = rects.joinToString(",") { "${it.left},${it.top},${it.right},${it.bottom}" }
@@ -1488,6 +1577,7 @@ open class VoiceControlService : AccessibilityService() {
         }
         // 快照与屏幕所画严格一致：重画分支或稳定分支都在此回填（落定复查会再刷新）
         labelRects = rects
+        numberSnapshot = reviewSnapshot
     }
 
     /** 落定复查：600ms 后再刷新一次，纠正切换过渡期可能画错的位置 */
@@ -1594,37 +1684,48 @@ open class VoiceControlService : AccessibilityService() {
         return ok
     }
 
-    /** 长按第 number 个可编号元素（编号模式：显示编号后说「长按 1」） */
+    /** 长按第 number 个可编号元素（编号模式：显示编号后说「长按 1」）。
+     *  2026-09-30 执行反馈分层轮：旧实现无条件 post 后返回 true——编号越界/无窗口也要等
+     *  排队跑完才弹「没有编号」，而 VoiceService 已先写了「✅」（已排队被谎报成已执行）。
+     *  修法=doTapLabel 同款主线程同步：越界/无窗口同步返回 false，反馈符合真实证据。 */
     private fun doLongPressLabel(number: Int): Boolean {
         if (number < 1) return false
-        mainHandler.post {
-            // 与点击同款窗口兜底：激活窗口拿不到时从窗口列表找
-            var root = rootInActiveWindow
-            if (root == null) {
-                val w = runCatching { windows }.getOrNull()
-                root = w?.firstOrNull { it.isFocused }?.root ?: w?.firstOrNull()?.root
-            }
-            if (root == null) {
-                updateBar("⚠️ 拿不到当前窗口，请重试")
-                Log.w(TAG, "长按编号 $number 失败：拿不到当前窗口")
-                return@post
-            }
-            val c = labelCenter(root, number)
-            if (c == null) {
-                updateBar("⚠️ 没有编号 $number（看清屏幕编号范围）")
-                Log.w(TAG, "长按编号 $number 失败：越界/无窗口")
-                return@post
-            }
-            val ok = longPressAt(c.first, c.second)
-            Log.i(TAG, "长按编号 $number @(${c.first.toInt()},${c.second.toInt()}) -> $ok")
-        }
-        return true
+        if (android.os.Looper.myLooper() == mainLooper) return longPressLabelInternal(number)
+        mainHandler.post { longPressLabelInternal(number) }
+        return true   // 非主线程兜底：无法同步取结果（正常调用都走主线程分支）
     }
 
-    /** 长按屏幕正中间（长按待命模式下说「中间」时调用） */
+    private fun longPressLabelInternal(number: Int): Boolean {
+        // 与点击同款窗口兜底：激活窗口拿不到时从窗口列表找
+        var root = rootInActiveWindow
+        if (root == null) {
+            val w = runCatching { windows }.getOrNull()
+            root = w?.firstOrNull { it.isFocused }?.root ?: w?.firstOrNull()?.root
+        }
+        if (root == null) {
+            updateBar("⚠️ 拿不到当前窗口，请重试")
+            Log.w(TAG, "长按编号 $number 失败：拿不到当前窗口")
+            return false
+        }
+        val c = labelCenter(root, number)
+        if (c == null) {
+            updateBar("⚠️ 没有编号 $number（看清屏幕编号范围）")
+            Log.w(TAG, "长按编号 $number 失败：越界/无窗口")
+            return false
+        }
+        lastLongPressPoint = c   // 目标确定即登记（供「重复」回放同一点位，2026-09-30）
+        val ok = longPressAt(c.first, c.second)
+        Log.i(TAG, "长按编号 $number @(${c.first.toInt()},${c.second.toInt()}) -> $ok")
+        return ok
+    }
+
+    /** 长按屏幕正中间（长按待命模式下说「中间」时调用）。
+     *  2026-09-30：落点登记（供「重复」回放同一点位）。 */
     private fun doLongPressCenter(): Boolean {
         val dm = resources.displayMetrics
-        return longPressAt(dm.widthPixels / 2f, dm.heightPixels / 2f)
+        val c = dm.widthPixels / 2f to dm.heightPixels / 2f
+        lastLongPressPoint = c
+        return longPressAt(c.first, c.second)
     }
 
     // ===== 点击闭环校验（A 线）=====
@@ -1661,21 +1762,26 @@ open class VoiceControlService : AccessibilityService() {
      * 补发的第二击把刚选中的又取消了（用户看到「点了自动取消」）；对开关/选择类控件，
      * 双击=打开再关闭，危害远大于偶发漏点。新原则：像人一样点一下就完，
      * 没点中用户看得到、再说一次编号即可。指纹仅记日志供诊断。
+     * 2026-09-30 GUARDRAILS C.2 修复：观察从主线程 sleep(250) 改为 postDelayed 异步比对——
+     * 比对结果仅诊断日志（本就不影响返回值），主线程零阻塞；返回语义=手势派发结果不变。
      */
     private fun tapWithVerify(x: Float, y: Float, what: String): Boolean {
         val before = windowFingerprint()
         val dispatched = tapAt(x, y)
         if (!dispatched) return false
-        SystemClock.sleep(250)
-        val after = windowFingerprint()
-        if (before != null && after != null && before == after) {
-            Log.i(TAG, "点击后界面未见结构变化（可能是选择/开关类控件）：$what，不补发")
+        if (before != null) {
+            mainHandler.postDelayed({
+                val after = windowFingerprint()
+                if (after != null && before == after) {
+                    Log.i(TAG, "点击后界面未见结构变化（可能是选择/开关类控件）：$what，不补发")
+                }
+            }, 250L)
         }
         return true
     }
 
     /** 取文字 target 对应元素的中心坐标（主线程内调用）；找不到返回 null */
-    private fun textCenter(target: String): Pair<Float, Float>? {
+    private fun textCenter(target: String, onMissing: (() -> Unit)? = null): Pair<Float, Float>? {
         if (target.isBlank()) return null
         val root = rootInActiveWindow ?: run {
             Log.w(TAG, "文字定位失败：拿不到当前窗口")
@@ -1684,9 +1790,10 @@ open class VoiceControlService : AccessibilityService() {
         // 精确匹配优先，再包含匹配（避免「抖音」误点「抖音火山版」）
         val exact = mutableListOf<AccessibilityNodeInfo>()
         val fuzzy = mutableListOf<AccessibilityNodeInfo>()
-        runCatching { collectByText(root, target, exact, fuzzy) }
+        val searchComplete = runCatching { collectByText(root, target, exact, fuzzy) }.isSuccess
         val candidates = if (exact.isNotEmpty()) exact else fuzzy
         if (candidates.isEmpty()) {
+            if (searchComplete) onMissing?.invoke() // 查询异常不能作为“目标不存在”的救回证据
             Log.w(TAG, "文字定位：当前页面没有「$target」")
             return null
         }
@@ -1713,20 +1820,45 @@ open class VoiceControlService : AccessibilityService() {
         return if (onScreen(cx, cy)) cx to cy else null
     }
 
-    /** 根据文字点击：遍历无障碍树找 text/内容描述 匹配的节点，点它（或最近可点击祖先）。返回是否找到并派发。 */
+    /** 根据文字点击：遍历无障碍树找 text/内容描述 匹配的节点，点它（或最近可点击祖先）。
+     *  2026-09-30 执行反馈分层轮：识别回调本就在主线程（onRecognized 经 handler.post），
+     *  旧实现把点击 post 到队列尾再立即返回 true——VoiceService 随即读 lastTextTapPoint
+     *  时排队的点击还没跑，读到的是上一次的坐标（用户实锤：点击A→点击B→重复一次 重复到 A）。
+     *  修法与 doTapLabel 同款：主线程同步执行（返回=手势派发+指纹观察的真实结果）；
+     *  **点位在目标确定时同步登记**（要重复的就是本次目标，与排队无关）；非主线程兜底 post。
+     */
     private fun doTapText(target: String): Boolean {
-        val c = textCenter(target) ?: return false
-        mainHandler.post {
-            val ok = tapWithVerify(c.first, c.second, "文字「$target」")
-            if (ok) lastTextTapPoint = c
-            Log.i(TAG, "文字点击「$target」@(${c.first.toInt()},${c.second.toInt()}) -> $ok")
-        }
-        return true
+        return doTapTextDetailed(target) == SilentCommandRecovery.TextTapStatus.DISPATCHED
     }
 
-    /** 根据文字长按：遍历无障碍树找 text 匹配节点，长按它（或最近可点击祖先）。返回是否找到并派发。 */
+    private fun doTapTextDetailed(target: String): SilentCommandRecovery.TextTapStatus {
+        var missing = false
+        val c = textCenter(target) { missing = true } ?: return if (missing)
+            SilentCommandRecovery.TextTapStatus.NOT_FOUND else SilentCommandRecovery.TextTapStatus.UNAVAILABLE
+        lastTextTapPoint = c   // 目标确定即登记，不等排队的点击运行
+        if (android.os.Looper.myLooper() == mainLooper) {
+            val ok = tapWithVerify(c.first, c.second, "文字「$target」")
+            Log.i(TAG, "文字点击「$target」@(${c.first.toInt()},${c.second.toInt()}) -> $ok")
+            return if (ok) SilentCommandRecovery.TextTapStatus.DISPATCHED else SilentCommandRecovery.TextTapStatus.FAILED
+        }
+        mainHandler.post {
+            val ok = tapWithVerify(c.first, c.second, "文字「$target」")
+            Log.i(TAG, "文字点击「$target」@(${c.first.toInt()},${c.second.toInt()}) -> $ok")
+        }
+        return SilentCommandRecovery.TextTapStatus.DISPATCHED // 已排队；不得再走声音救回
+    }
+
+    /** 根据文字长按：遍历无障碍树找 text 匹配节点，长按它（或最近可点击祖先）。
+     *  2026-09-30：主线程同步执行（同 doTapText 模式）——返回=手势派发结果；
+     *  非主线程兜底 post 返回 true=已找到目标并排队。 */
     private fun doLongPressText(target: String): Boolean {
         val c = textCenter(target) ?: return false
+        lastLongPressPoint = c   // 目标确定即登记（供「重复」回放同一点位）
+        if (android.os.Looper.myLooper() == mainLooper) {
+            val ok = longPressAt(c.first, c.second)
+            Log.i(TAG, "文字长按「$target」@(${c.first.toInt()},${c.second.toInt()}) -> $ok")
+            return ok
+        }
         mainHandler.post {
             val ok = longPressAt(c.first, c.second)
             Log.i(TAG, "文字长按「$target」@(${c.first.toInt()},${c.second.toInt()}) -> $ok")
@@ -1767,6 +1899,7 @@ open class VoiceControlService : AccessibilityService() {
     }
 
     private fun removeLabelsOverlay() {
+        numberSnapshot = null
         labelsOverlayView?.let { runCatching { windowManager?.removeView(it) } }
         labelsOverlayView = null
         labelRects = emptyList()   // 覆盖层摘除，快照同步作废
@@ -1814,10 +1947,17 @@ open class VoiceControlService : AccessibilityService() {
         return true
     }
 
-    /** 点击当前网格区域中心（定位完成后真正点击），点击后清除网格 */
-    private fun doTapGridCenter() {
-        val region = gridStack.lastOrNull() ?: return
-        val view = gridOverlayView ?: return
+    /** 点击当前网格区域中心；网格保持显示，用户说「隐藏网格」或会话结束时才清理。
+     *  2026-09-30 执行反馈分层轮：主线程同步派发（同 doTapText 模式），返回=手势派发结果 */
+    private fun doTapGridCenter(): Boolean {
+        val region = gridStack.lastOrNull() ?: return false
+        val view = gridOverlayView ?: return false
+        // 2026-09-30 收尾轮：浮层已创建但尚未布局（width/height=0）时拒绝派发——
+        // 零尺寸视图会把坐标算到视图原点（错误位置），宁可不点也不点错
+        if (view.width <= 0 || view.height <= 0) {
+            Log.w(TAG, "网格浮层未布局（${view.width}x${view.height}），拒绝点击中心")
+            return false
+        }
         // 坐标同步计算并登记（v0.57.21）：execute() 返回时 lastGridTapPoint 已就绪——
         // 日志实锤的 bug：轻点点中网格格心，但「重复」重放轻点命令→网格已清→落到屏幕
         // 几何中心；同步登记后识别层可把该次轻点记成点位动作，重复=原位再点
@@ -1826,43 +1966,57 @@ open class VoiceControlService : AccessibilityService() {
         val cx = region.centerX() * view.width + loc[0]
         val cy = region.centerY() * view.height + loc[1]
         lastGridTapPoint = cx to cy
+        if (android.os.Looper.myLooper() == mainLooper) {
+            val ok = tapAt(cx, cy)
+            Log.i(TAG, "网格点击中心 @(${cx.toInt()},${cy.toInt()}) -> $ok")
+            return ok
+        }
         mainHandler.post {
             val ok = tapAt(cx, cy)
             Log.i(TAG, "网格点击中心 @(${cx.toInt()},${cy.toInt()}) -> $ok")
-            gridStack.clear()
-            removeGridOverlay()
         }
+        return true
     }
 
-    /** 点击第 number 格中心（网格显示时一步式直接点该格，不用先缩到最小），点击后清除网格 */
-    private fun doTapGridCell(number: Int): Boolean {        val region = gridStack.lastOrNull() ?: return false
+    /** 点击第 number 格中心（网格显示时一步式直接点该格，不用先缩到最小）；点击后保持当前网格。
+     *  2026-09-30：主线程同步派发（同款模式）——越界/无网格同步拒绝，返回=手势派发结果 */
+    private fun doTapGridCell(number: Int): Boolean {
+        val region = gridStack.lastOrNull() ?: return false
         val total = GRID_COLS * GRID_ROWS
         if (number < 1 || number > total) {
             Log.w(TAG, "点击失败：编号 $number 超出范围（1~$total）")
             return false
         }
         val view = gridOverlayView ?: return false
-        // 坐标在主线程同步计算并记录（供「重复」回放同一点位），点击派发给系统后清除网格
-        val cellW = region.width() / GRID_COLS
-        val cellH = region.height() / GRID_ROWS
-        val col = (number - 1) % GRID_COLS
-        val row = (number - 1) / GRID_COLS
+        // 2026-09-30 收尾轮：零尺寸视图拒绝派发（坐标会算错，宁可不点也不点错）
+        if (view.width <= 0 || view.height <= 0) {
+            Log.w(TAG, "网格浮层未布局（${view.width}x${view.height}），拒绝点击第 $number 格")
+            return false
+        }
+        // 坐标在主线程同步计算并记录（供「重复」回放同一点位），点击派发给系统后清除网格。
+        // 2026-09-30 网格误点修复：行号此前误用 GRID_ROWS——改走 gridCellCenterNormalized
+        // （与 doZoomGrid 同一几何：3 列按行填充，第 4 格=第二行第一列）
+        val (nx, ny) = gridCellCenterNormalized(number)
         val loc = IntArray(2)
         view.getLocationOnScreen(loc)
-        val cx = (region.left + (col + 0.5f) * cellW) * view.width + loc[0]
-        val cy = (region.top + (row + 0.5f) * cellH) * view.height + loc[1]
+        val cx = (region.left + nx * region.width()) * view.width + loc[0]
+        val cy = (region.top + ny * region.height()) * view.height + loc[1]
         lastGridTapPoint = cx to cy
+        if (android.os.Looper.myLooper() == mainLooper) {
+            val ok = tapAt(cx, cy)
+            Log.i(TAG, "点击第 $number 格 @(${cx.toInt()},${cy.toInt()}) -> $ok")
+            return ok
+        }
         mainHandler.post {
             val ok = tapAt(cx, cy)
             Log.i(TAG, "点击第 $number 格 @(${cx.toInt()},${cy.toInt()}) -> $ok")
-            gridStack.clear()
-            removeGridOverlay()
         }
         return true
     }
 
     /** 长按第 number 格中心（v0.57.19 用户需求：无编号页面用网格精确定位长按）。
-     *  坐标计算与点击格同源；长按后清除网格；lastGridTapPoint 同步记录（供「重复」回放） */
+     *  坐标计算与点击格同源；长按后保持当前网格；lastGridTapPoint 同步记录（供「重复」回放）。
+     *  2026-09-30：主线程同步派发（同款模式），返回=手势派发结果 */
     private fun doLongPressGridCell(number: Int): Boolean {
         val region = gridStack.lastOrNull() ?: return false
         val total = GRID_COLS * GRID_ROWS
@@ -1871,20 +2025,26 @@ open class VoiceControlService : AccessibilityService() {
             return false
         }
         val view = gridOverlayView ?: return false
-        val cellW = region.width() / GRID_COLS
-        val cellH = region.height() / GRID_ROWS
-        val col = (number - 1) % GRID_COLS
-        val row = (number - 1) / GRID_COLS
+        // 2026-09-30 收尾轮：零尺寸视图拒绝派发（坐标会算错，宁可不点也不点错）
+        if (view.width <= 0 || view.height <= 0) {
+            Log.w(TAG, "网格浮层未布局（${view.width}x${view.height}），拒绝长按第 $number 格")
+            return false
+        }
+        // 2026-09-30 网格误点修复：行号此前误用 GRID_ROWS——改走 gridCellCenterNormalized
+        val (nx, ny) = gridCellCenterNormalized(number)
         val loc = IntArray(2)
         view.getLocationOnScreen(loc)
-        val cx = (region.left + (col + 0.5f) * cellW) * view.width + loc[0]
-        val cy = (region.top + (row + 0.5f) * cellH) * view.height + loc[1]
+        val cx = (region.left + nx * region.width()) * view.width + loc[0]
+        val cy = (region.top + ny * region.height()) * view.height + loc[1]
         lastGridTapPoint = cx to cy
+        if (android.os.Looper.myLooper() == mainLooper) {
+            val ok = longPressAt(cx, cy)
+            Log.i(TAG, "长按第 $number 格 @(${cx.toInt()},${cy.toInt()}) -> $ok")
+            return ok
+        }
         mainHandler.post {
             val ok = longPressAt(cx, cy)
             Log.i(TAG, "长按第 $number 格 @(${cx.toInt()},${cy.toInt()}) -> $ok")
-            gridStack.clear()
-            removeGridOverlay()
         }
         return true
     }

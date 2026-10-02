@@ -218,12 +218,18 @@ class IslandBar(private val context: Context) {
         mainHandler.post {
             val d = dp(8).toFloat()
             pillView.animate().cancel()
+            // v0.57.24 修复位移漂移（用户实锤：连说「向上摇移」胶囊被顶出屏幕上缘）：
+            // translationXBy/YBy 是增量动画，弹回半途被下一条摇移命令 cancel 时视图冻结在
+            // 半途回程位置，下次增量从残余值起算——每次打断净漂移一点，单调累积。
+            // 双保险：起跳前硬复位 + 弹回段用绝对值 translationX/Y(0) 而非增量
+            pillView.translationX = 0f
+            pillView.translationY = 0f
             pillView.animate()
                 .translationXBy(dx * d).translationYBy(dy * d)
                 .setDuration(130L)
                 .withEndAction {
                     pillView.animate()
-                        .translationXBy(-dx * d).translationYBy(-dy * d)
+                        .translationX(0f).translationY(0f)
                         .setDuration(200L)
                         .start()
                 }

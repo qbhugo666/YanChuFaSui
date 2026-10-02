@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.BroadcastReceiver
+import android.content.ContentProviderClient
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -18,6 +19,7 @@ import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.AutomaticGainControl
 import android.media.audiofx.NoiseSuppressor
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
@@ -33,6 +35,10 @@ import com.k2fsa.sherpa.onnx.Vad
 import com.k2fsa.sherpa.onnx.VadModelConfig
 import kotlin.concurrent.thread
 import java.io.File
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.ThreadFactory
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 
 /**
  * 前台服务：会话期间占用麦克风，做【离线】语音识别。
@@ -44,15 +50,20 @@ import java.io.File
  *     删除静音自动释放——60s 安静就断太激进，交给看门狗时间制即可）；
  *  3. 锁屏立即释放，保证紧急通道随叫随到。
  */
+private object NativeModelInitLock { val lock = Any() }
+
 class VoiceService : Service() {
 
     companion object {
         private const val TAG = "VoiceControl"
+        private const val AUDIO_DECISION_INIT_TIMEOUT_MS = 10_000L
+        private const val AUDIO_DECISION_RETRY_BACKOFF_MS = 60_000L
+        private val AUDIO_DECISION_CONNECT_LOCK = Any()
+        @Volatile private var audioDecisionBlockedUntil = 0L
         const val CHANNEL_ID = "voice_session"
         const val NOTIFICATION_ID = 1
         const val ACTION_STOP = "com.voicecontrol.app.action.STOP"
         // 主页状态卡「已完成」停留时长：给足视觉确认，再自动回聆听态
-        private const val PHASE_DONE_MILLIS = 1200L
         // 测试注入（开发期专用）：不经过麦克风，直接重放「识别→匹配→执行」全链路
         const val ACTION_SIMULATE = "com.voicecontrol.app.action.SIMULATE"
         const val EXTRA_TEXT = "com.voicecontrol.app.extra.TEXT"
@@ -98,6 +109,11 @@ class VoiceService : Service() {
 
         // 输入框文本操作探针（开发期诊断，Release 由 DEBUG 门禁自动禁用）
         const val ACTION_TEXT_PROBE = "com.voicecontrol.app.action.TEXT_PROBE"
+        const val ACTION_DECISION_PROBE = "com.voicecontrol.app.action.DECISION_PROBE"
+        // M6 固定 PCM 一致性探针（2026-09-30 D 复核①）：只推理不派发动作——读 PC 基准
+        // probe_fixed.json 中的 wav，跑与生产完全相同的 decideDetailed 链（真实 encoder
+        // pooled→双头），结果写 files/m6_android_probe.json 供 PC compare。
+        const val ACTION_M6_PCM_PROBE = "com.voicecontrol.app.action.M6_PCM_PROBE"
 
         // 崩溃触发后门（开发期诊断，Release 由 DEBUG 门禁自动禁用）
         const val ACTION_CRASH_TEST = "com.voicecontrol.app.action.CRASH_TEST"
@@ -261,14 +277,14 @@ class VoiceService : Service() {
 
     // 上一次动作（供「重复」命令回放）
     private sealed class LastAction {
-        data class Command(val action: String) : LastAction()
+        data class Command(val action: String, val focusedCursorOnly: Boolean = false) : LastAction()
         data class TapLabel(val number: Int) : LastAction()
         data class TapPoint(val x: Float, val y: Float) : LastAction()
         /** v0.57.19：网格长按落点（「重复」回放同点位长按） */
         data class LongPressPoint(val x: Float, val y: Float) : LastAction()
     }
     private var lastAction: LastAction? = null
-    private var repeatRunnable: Runnable? = null
+    // 重复任务句柄已升级为 RepeatRun（uid+times+executed，2026-09-30）——声明移至 repeatLastAction 旁
 
     // 长按待命模式（两步式：先「长按」进入，再报数字/「中间」，提升「动词+数字」识别率）
     private var longPressMode = false
@@ -361,6 +377,15 @@ class VoiceService : Service() {
     @Volatile
     private var sessionGeneration = 0
 
+    // 句子身份（2026-09-28 M4）：sessionTag 在会话提交点生成、utteranceSeq 由识别线程单调递增，
+    // 组成 utteranceId 贯穿 采集→判定→使用记录——记录关联不再靠「识别文本相同」匹配
+    // （旧法在「同一句连说两遍」时会关联错条目），跨句永不串号。
+    // @Volatile（2026-09-30 收尾轮）：重复任务的迟到判定在主线程读、识别线程写。
+    @Volatile
+    private var sessionTag = ""
+    @Volatile
+    private var utteranceSeq = 0
+
     // 启动加载在途标记（v0.55.7）：true = 有初始化线程正在加载模型且尚未落地/夭折。
     // 在途期间的重复启动请求一律忽略——此前每次点击都会代际+1 把加载中的线程顶替弃货，
     // 连点比加载快时永远加载不完，主页涟漪转不停、会话起不来（2026-09-17 用户实测复现）。
@@ -369,7 +394,223 @@ class VoiceService : Service() {
     private var initInFlight = false
 
     // 初始化互斥锁：串行化模型创建（每个 SenseVoice 约 200MB，并发创建会 OOM）
-    private val initLock = Any()
+    // 跨 Service 实例共享：旧识别线程未退出前，新会话不能再创建第二套 200MB 原生模型。
+    private val initLock = NativeModelInitLock.lock
+
+    // 仅持有跨进程句音频判决入口；主进程不得加载 ORT 1.20 原生库。
+    private data class RemoteDecisionSession(val client: ContentProviderClient, val token: String)
+    @Volatile private var audioDecisionSession: RemoteDecisionSession? = null
+    @Volatile private var decisionIpcUnavailable = false
+    private val decisionInitLock = Any()
+    @Volatile private var decisionInitThread: Thread? = null
+    private var decisionInitRequestedGeneration = 0
+    private var decisionInitAttemptedGeneration = -1
+    private val decisionExecutor = ThreadPoolExecutor(
+        1, 1, 0L, TimeUnit.MILLISECONDS, ArrayBlockingQueue<Runnable>(1),
+        ThreadFactory { task -> Thread(task, "audio-decision-ipc").apply { isDaemon = true } }
+    )
+
+    private fun isDecisionIpcBlocked(): Boolean = decisionIpcUnavailable ||
+        SystemClock.elapsedRealtime() < audioDecisionBlockedUntil
+
+    private fun markDecisionIpcUnavailable() {
+        decisionIpcUnavailable = true
+        audioDecisionBlockedUntil = SystemClock.elapsedRealtime() + AUDIO_DECISION_RETRY_BACKOFF_MS
+    }
+
+    private fun initRemoteDecision(): RemoteDecisionSession? = synchronized(AUDIO_DECISION_CONNECT_LOCK) {
+        if (!AudioReviewRequest.AVAILABLE) return@synchronized null
+        if (isDecisionIpcBlocked()) return@synchronized null
+        val client = try {
+            contentResolver.acquireUnstableContentProviderClient(AudioDecisionProvider.URI)
+        } catch (error: Throwable) {
+            Log.e(TAG, "AUDIO_DECISION 无法启动独立进程，本会话使用基础识别", error)
+            markDecisionIpcUnavailable()
+            return@synchronized null
+        }
+        if (client == null) {
+            markDecisionIpcUnavailable()
+            return@synchronized null
+        }
+        val session = RemoteDecisionSession(client, java.util.UUID.randomUUID().toString())
+        try {
+            if (callRemoteDecision(session, AudioDecisionProvider.INIT,
+                    Bundle().apply { putBoolean(AudioDecisionProvider.M6_SHADOW, m6ShadowEnabled) },
+                    AUDIO_DECISION_INIT_TIMEOUT_MS)
+                    ?.getBoolean(AudioDecisionProvider.READY) == true) {
+                audioDecisionBlockedUntil = 0L
+                Log.i(TAG, "AUDIO_DECISION 独立进程初始化成功")
+                session
+            } else {
+                Log.e(TAG, "AUDIO_DECISION 初始化失败或超时，本会话继续使用基础识别")
+                markDecisionIpcUnavailable()
+                releaseRemoteDecision(session)
+                null
+            }
+        } catch (error: Throwable) {
+            Log.e(TAG, "AUDIO_DECISION 独立进程连接失败，本会话继续使用基础识别", error)
+            markDecisionIpcUnavailable()
+            releaseRemoteDecision(session)
+            null
+        }
+    }
+
+    /** 二审模型在基础识别已经开始后单独初始化；失败不会挡住普通聆听。
+     *  2026-09-30 D 阶段：Debug 构建附带 m6 全类头 shadow 加载（只算提案不改变动作）——
+     *  Release 恒 false（任务书 D：OFF/Release 零新增加载）。 */
+    private val m6ShadowEnabled: Boolean
+        get() = AudioReviewRequest.AVAILABLE &&
+            (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+
+    private fun startRemoteDecisionInit(generation: Int) {
+        if (!recording || !AudioDecision.isEnabled(applicationContext) || isDecisionIpcBlocked()) return
+        synchronized(decisionInitLock) {
+            decisionInitRequestedGeneration = generation
+            if (!recording || !AudioDecision.isEnabled(applicationContext) || isDecisionIpcBlocked()) return
+            if (audioDecisionSession != null || decisionInitAttemptedGeneration == generation) return
+            if (decisionInitThread?.isAlive == true) return
+
+            decisionInitAttemptedGeneration = generation
+            val worker = Thread({
+                val currentThread = Thread.currentThread()
+                val pending = runCatching { initRemoteDecision() }.getOrElse { error ->
+                    markDecisionIpcUnavailable()
+                    Log.e(TAG, "AUDIO_DECISION 初始化异常，本会话继续使用基础识别", error)
+                    null
+                }
+                var adopted = false
+                if (pending != null) synchronized(decisionInitLock) {
+                    if (recording && sessionGeneration == generation &&
+                        AudioDecision.isEnabled(applicationContext) && !isDecisionIpcBlocked() &&
+                        audioDecisionSession == null) {
+                        audioDecisionSession = pending
+                        adopted = true
+                    }
+                }
+                if (!adopted) releaseRemoteDecision(pending)
+
+                var retryGeneration: Int? = null
+                synchronized(decisionInitLock) {
+                    if (decisionInitThread === currentThread) decisionInitThread = null
+                    if (!isDecisionIpcBlocked() && recording && AudioDecision.isEnabled(applicationContext) &&
+                        audioDecisionSession == null && decisionInitRequestedGeneration > generation) {
+                        retryGeneration = decisionInitRequestedGeneration
+                    }
+                }
+                retryGeneration?.let(::startRemoteDecisionInit)
+            }, "audio-decision-init").apply { isDaemon = true }
+            decisionInitThread = worker
+            worker.start()
+        }
+    }
+
+    /** ContentProviderClient 只在单线程 executor 中调用；Android 文档明确它不是线程安全对象。 */
+    private fun callRemoteDecision(
+        session: RemoteDecisionSession,
+        method: String,
+        extras: Bundle?,
+        timeoutMs: Long,
+    ): Bundle? {
+        if (isDecisionIpcBlocked()) return null
+        val request = Bundle().apply {
+            putString(AudioDecisionProvider.SESSION, session.token)
+            extras?.let { putAll(it) }
+        }
+        val task = runCatching {
+            decisionExecutor.submit<Bundle?> { session.client.call(method, null, request) }
+        }.getOrElse { error ->
+            Log.e(TAG, "AUDIO_DECISION 请求未能排队：$method", error)
+            if (method != AudioDecisionProvider.SHUTDOWN) markDecisionIpcUnavailable()
+            return null
+        }
+        return try {
+            task.get(timeoutMs, TimeUnit.MILLISECONDS)
+        } catch (e: java.util.concurrent.TimeoutException) {
+            task.cancel(true)
+            if (method != AudioDecisionProvider.SHUTDOWN) markDecisionIpcUnavailable()
+            Log.e(TAG, "AUDIO_DECISION 请求超时 ${timeoutMs}ms：$method，本会话不再向该连接发送请求")
+            null
+        } catch (e: InterruptedException) {
+            task.cancel(true)
+            Thread.currentThread().interrupt()
+            if (method != AudioDecisionProvider.SHUTDOWN) markDecisionIpcUnavailable()
+            Log.w(TAG, "AUDIO_DECISION 请求线程被中断：$method")
+            null
+        } catch (e: Throwable) {
+            task.cancel(true)
+            if (method != AudioDecisionProvider.SHUTDOWN) markDecisionIpcUnavailable()
+            Log.e(TAG, "AUDIO_DECISION IPC 失败：$method", e.cause ?: e)
+            null
+        }
+    }
+
+    private fun decideRemote(session: RemoteDecisionSession?, pcm: FloatArray): AudioDecisionOutcome {
+        if (session == null) return AudioDecisionOutcome(null, null, 0L, "client_unavailable")
+        val reply = callRemoteDecision(
+            session, AudioDecisionProvider.DECIDE,
+            Bundle().apply { putFloatArray(AudioDecisionProvider.PCM, pcm) }, 2500L,
+        ) ?: run {
+            markDecisionIpcUnavailable()
+            if (audioDecisionSession === session) audioDecisionSession = null
+            releaseRemoteDecision(session)
+            DiagnosticsHelper.log("二审 IPC 超时或进程失联，本会话回退原命令且不再重试")
+            return AudioDecisionOutcome(null, null, 0L, "ipc_timeout_or_dead")
+        }
+        return AudioDecisionOutcome(
+            decision = reply.getString(AudioDecisionProvider.RESULT),
+            confidence = if (reply.containsKey(AudioDecisionProvider.CONFIDENCE))
+                reply.getFloat(AudioDecisionProvider.CONFIDENCE) else null,
+            latencyMs = reply.getLong(AudioDecisionProvider.LATENCY_MS, 0L),
+            fallbackReason = reply.getString(AudioDecisionProvider.FALLBACK_REASON),
+            encoderMs = reply.getLong(AudioDecisionProvider.ENCODER_MS, 0L),
+            headMs = reply.getLong(AudioDecisionProvider.HEAD_MS, 0L),
+            // M6 shadow 提案（2026-09-30 D）：label:prob,... 解析；未加载为 null
+            m6Top = reply.getString(AudioDecisionProvider.M6_TOP)?.split(",")?.mapNotNull {
+                val i = it.indexOf(':')
+                if (i <= 0) null else it.substring(0, i) to it.substring(i + 1).toFloatOrNull()
+            }?.filter { it.second != null }?.map { it.first to it.second!! },
+            numTop = reply.getString(AudioDecisionProvider.NUM_TOP)?.split(",")?.mapNotNull {
+                val i = it.indexOf(':')
+                if (i <= 0) null else it.substring(0, i) to it.substring(i + 1).toFloatOrNull()
+            }?.filter { it.second != null }?.map { it.first to it.second!! },
+            numSegmentTop = reply.getString(AudioDecisionProvider.NUM_SEGMENT_TOP)?.split(",")?.mapNotNull {
+                val i = it.indexOf(':')
+                if (i <= 0) null else it.substring(i+1).toFloatOrNull()?.let { p -> it.substring(0,i) to p }
+            },
+            numSegmentHeadUs = reply.getLong(AudioDecisionProvider.NUM_SEGMENT_HEAD_US,0L),
+            numPairTop = reply.getString(AudioDecisionProvider.NUM_PAIR_TOP)?.split(",")?.mapNotNull {
+                val i = it.indexOf(':')
+                if (i <= 0) null else it.substring(i+1).toFloatOrNull()?.let { p -> it.substring(0,i) to p }
+            },
+            numPairHeadUs = reply.getLong(AudioDecisionProvider.NUM_PAIR_HEAD_US,0L),
+            cursorTop = reply.getString(AudioDecisionProvider.CURSOR_TOP)?.split(",")?.mapNotNull {
+                val i = it.indexOf(':')
+                if (i <= 0) null else it.substring(i+1).toFloatOrNull()?.let { p -> it.substring(0,i) to p }
+            },
+            cursorHeadUs = reply.getLong(AudioDecisionProvider.CURSOR_HEAD_US,0L),
+        )
+    }
+
+    /** 先在 IPC 队列尾向 provider 归还 session，再关闭 client，避免与在途 call 并发。 */
+    private fun releaseRemoteDecision(session: RemoteDecisionSession?) {
+        if (session == null) return
+        runCatching {
+            decisionExecutor.execute {
+                try {
+                    val extras = Bundle().apply { putString(AudioDecisionProvider.SESSION, session.token) }
+                    val reply = session.client.call(AudioDecisionProvider.SHUTDOWN, null, extras)
+                    reply?.getString(AudioDecisionProvider.STATS)?.let {
+                        Log.i(TAG, it)
+                        DiagnosticsHelper.log(it)
+                    }
+                } catch (e: Throwable) {
+                    Log.w(TAG, "AUDIO_DECISION session 释放失败", e)
+                } finally {
+                    runCatching { session.client.close() }
+                }
+            }
+        }.onFailure { error -> Log.w(TAG, "AUDIO_DECISION client 释放任务未能排队", error) }
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -391,9 +632,22 @@ class VoiceService : Service() {
         // v0.56.26 商用门禁：开发期测试入口（SIMULATE 注入/文本探针/崩溃触发/回声台/ASR 台）
         // 仅 Debug 构建生效，Release 构建一律忽略——公开发行包不含任何远程调试后门
         val debugBuild = (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        // 用户移除二审后，旧诊断入口也不得加载模型、推理或占麦。
+        if (!AudioReviewRequest.AVAILABLE && intent?.action in setOf(ACTION_DECISION_PROBE, ACTION_M6_PCM_PROBE)) {
+            Log.i(TAG, "声音二审已移除，忽略旧诊断入口")
+            if (!recording && !initInFlight) {
+                // 兼容 startForegroundService 的生命周期，随后立即收掉通知。
+                createChannelIfNeeded()
+                startForeground(NOTIFICATION_ID, buildNotification("语音控制"))
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelfResult(startId)
+            }
+            return START_NOT_STICKY
+        }
         if (!debugBuild && intent?.action in setOf(
                 ACTION_SIMULATE, ACTION_TEXT_PROBE, ACTION_CRASH_TEST,
-                ACTION_ASR_TEST, ACTION_ECHO_TEST, ACTION_ECHO_STOP
+                ACTION_ASR_TEST, ACTION_ECHO_TEST, ACTION_ECHO_STOP, ACTION_DECISION_PROBE,
+                ACTION_M6_PCM_PROBE
             )
         ) {
             Log.w(TAG, "Release 构建忽略调试动作: ${intent?.action}")
@@ -415,6 +669,127 @@ class VoiceService : Service() {
                 runCatching {
                     stopForeground(STOP_FOREGROUND_REMOVE)
                     stopSelf()
+                }
+            }.start()
+            return START_NOT_STICKY
+        }
+
+        // 音频二审延迟探针（v0.58.0-enhanced 开发埋点）：不占麦，用合成 2s 音频直接测
+        // fbank+LFR+CMVN+encoder+头 的真机端到端耗时
+        if (intent?.action == ACTION_DECISION_PROBE) {
+            if (recording || initInFlight) {
+                Log.w(TAG, "DECISION_PROBE 忽略：当前会话正在运行或初始化")
+                return START_NOT_STICKY
+            }
+            createChannelIfNeeded()
+            startForeground(NOTIFICATION_ID, buildNotification("⏱️ 二审延迟探针"))
+            Thread {
+                var session: RemoteDecisionSession? = null
+                try {
+                    session = initRemoteDecision()
+                    val pcm = FloatArray(32000) { Math.sin(it * 0.02).toFloat() * 0.3f }
+                    val t0 = SystemClock.elapsedRealtime()
+                    val decision = decideRemote(session, pcm)
+                    val dt = SystemClock.elapsedRealtime() - t0
+                    // 无麦克风构造一次正式 ASR，核对两个进程的原生库都能加载。
+                    val asrReady = runCatching {
+                        synchronized(initLock) {
+                            createRecognizer()?.let { it.release(); true } ?: false
+                        }
+                    }.getOrElse { error ->
+                        Log.e(TAG, "DECISION_PROBE ASR 原生库加载失败", error)
+                        false
+                    }
+                    val report = "DECISION_PROBE 真机二审耗时=${dt}ms decision=${decision.decision} conf=${decision.confidence} fallback=${decision.fallbackReason} asrReady=$asrReady remoteReady=${session != null} at=${System.currentTimeMillis()}"
+                    Log.i(TAG, report)
+                    runCatching {
+                        java.io.File(getFilesDir(), "decision_probe.txt")
+                            .appendText(report + "\n", Charsets.UTF_8)
+                    }
+                } finally {
+                    releaseRemoteDecision(session)
+                    // 探针执行期间可能收到正式启动；不要因此移除正式会话的通知或停止服务。
+                    if (!recording && !initInFlight) {
+                        stopForeground(STOP_FOREGROUND_REMOVE)
+                        stopSelf()
+                    }
+                }
+            }.start()
+            return START_NOT_STICKY
+        }
+
+        // M6 固定 PCM 一致性探针（2026-09-30 D 复核①，Debug 限定）：只推理不派发动作。
+        // 读 probe_pc.json（PC 端 m6_probe.py gen 推到 /data/local/tmp）中列出的 wav 文件，
+        // 逐条 16k 重采样+trim（与 PC 相同预处理）→ 生产 decideDetailed 链（真实 encoder
+        // pooled→音量头+m6 头）→ 写 files/m6_android_probe.json，adb pull 后 PC compare。
+        if (intent?.action == ACTION_M6_PCM_PROBE) {
+            if (recording || initInFlight) {
+                Log.w(TAG, "M6_PCM_PROBE 忽略：会话运行中")
+                return START_NOT_STICKY
+            }
+            createChannelIfNeeded()
+            startForeground(NOTIFICATION_ID, buildNotification("🔬 M6 一致性探针"))
+            Thread {
+                var session: RemoteDecisionSession? = null
+                try {
+                    session = initRemoteDecision()
+                    val sess = session
+                    if (sess == null) {
+                        Log.e(TAG, "M6_PCM_PROBE：远程进程不可用")
+                        return@Thread
+                    }
+                    // 通知 provider 加载 m6（探针专用——与正式会话同链）
+                    callRemoteDecision(sess, AudioDecisionProvider.INIT,
+                        Bundle().apply {
+                            putString(AudioDecisionProvider.SESSION, sess.token)
+                            putBoolean(AudioDecisionProvider.M6_SHADOW, true)
+                        }, AUDIO_DECISION_INIT_TIMEOUT_MS)
+                    val json = java.io.File("/data/local/tmp/probe_pc.json")
+                    if (!json.isFile) {
+                        Log.e(TAG, "M6_PCM_PROBE：/data/local/tmp/probe_pc.json 不存在（先 adb push）")
+                        return@Thread
+                    }
+                    val cases = org.json.JSONArray(json.readText(Charsets.UTF_8))
+                    val out = org.json.JSONArray()
+                    for (i in 0 until cases.length()) {
+                        val c = cases.getJSONObject(i)
+                        val wavPath = c.getString("pcm_path")
+                        // PC 侧路径 E:\... → 设备侧 /data/local/tmp/m6probe/<basename>
+                        val devPath = "/data/local/tmp/m6probe/" + wavPath.substringAfterLast('\\')
+                            .substringAfterLast('/')
+                        val f = java.io.File(devPath)
+                        if (!f.isFile) {
+                            Log.w(TAG, "M6_PCM_PROBE 缺文件: $devPath")
+                            continue
+                        }
+                        val pcm = readWav16k(f) ?: continue
+                        val trimmed = trimProbe(pcm)
+                        if (trimmed.size < 2400) continue
+                        val oc = decideRemote(sess, trimmed)
+                        out.put(org.json.JSONObject()
+                            .put("file", c.getString("file"))
+                            .put("pooled_first8", org.json.JSONArray())   // pooled 不出 IPC——以 vol/m6 输出对照
+                            .put("vol_decision", oc.decision ?: "null")
+                            .put("vol_conf", oc.confidence ?: -1.0)
+                            .put("m6_top", oc.m6Top?.joinToString(",") { "${it.first}:${it.second}" } ?: "")
+                            .put("num_top", oc.numTop?.joinToString(",") { "${it.first}:${it.second}" } ?: "")
+                            .put("num_segment_top", oc.numSegmentTop?.joinToString(",") { "${it.first}:${it.second}" } ?: "")
+                            .put("num_segment_head_us",oc.numSegmentHeadUs)
+                            .put("num_pair_top",oc.numPairTop?.joinToString(",") { "${it.first}:${it.second}" } ?: "")
+                            .put("num_pair_head_us",oc.numPairHeadUs)
+                            .put("cursor_top",oc.cursorTop?.joinToString(",") { "${it.first}:${it.second}" } ?: "")
+                            .put("latency_ms",oc.latencyMs).put("encoder_ms",oc.encoderMs)
+                            .put("cursor_head_us",oc.cursorHeadUs))
+                    }
+                    java.io.File(getFilesDir(), "m6_android_probe.json")
+                        .writeText(out.toString(1), Charsets.UTF_8)
+                    Log.i(TAG, "M6_PCM_PROBE 完成：${out.length()} cases → files/m6_android_probe.json")
+                } finally {
+                    releaseRemoteDecision(session)
+                    if (!recording && !initInFlight) {
+                        stopForeground(STOP_FOREGROUND_REMOVE)
+                        stopSelf()
+                    }
                 }
             }.start()
             return START_NOT_STICKY
@@ -489,7 +864,6 @@ class VoiceService : Service() {
 
         createChannelIfNeeded()
         startForeground(NOTIFICATION_ID, buildNotification("🔴 会话中 · 正在听"))
-
         // 模型加载秒级耗时，放后台线程：不阻塞主线程（ANR 风险），加载完成前不占麦。
         // 用「会话代际 + 初始化互斥锁」防并发初始化：
         //   代际——加载期间退出再立刻重开，旧线程发现被顶替就地释放资源，绝不双占麦 / 泄漏；
@@ -499,7 +873,7 @@ class VoiceService : Service() {
         val myGen = ++sessionGeneration
         thread(name = "voice-init") {
             try {
-                var commit = false
+                var committedSession: RecognitionSessionIdentity? = null
                 synchronized(initLock) {
                     // 锁内重新核对待办：前面已有线程在创建时，本次可能已作废
                     if (isSessionStale(myGen)) return@thread
@@ -533,14 +907,22 @@ class VoiceService : Service() {
                         runCatching { rec.release() }; runCatching { v.release() }
                         return@thread
                     }
-                    // 全部成功且仍是当前会话 → 锁内提交字段（防锁外提交被插队），置 commit 到锁外启动识别线程
+                    // 全部成功且仍是当前会话 → 锁内提交字段（防锁外提交被插队），锁外启动识别线程。
+                    // 2026-10-02：标签/句序先发布，再允许聆听；否则线程可能永久拿着空或上一会话标签。
                     recognizer = rec
                     vad = v
+                    committedSession = RecognitionSessionIdentity.commit(myGen,
+                        java.util.UUID.randomUUID().toString().take(6)) { identity ->
+                        sessionTag = identity.tag
+                        utteranceSeq = 0
+                    }
                     recording = true
-                    commit = true
                 }
-                if (commit) {
-                    recordThread = thread(name = "voice-recognition") { recognitionLoop() }
+                val loopSession = committedSession
+                if (loopSession != null) {
+                    // 先让基础识别完整落地；二审远程进程在后台启动，初始化超时不会挡住聆听。
+                    startRemoteDecisionInit(myGen)
+                    recordThread = thread(name = "voice-recognition") { recognitionLoop(loopSession) }
                     acquireScreenLock()   // 会话常亮（v0.57.6 用户拍板）：真正会话开始的唯一提交点
                     // 显示顶部识别状态横条
                     VoiceControlService.showBar()
@@ -558,7 +940,7 @@ class VoiceService : Service() {
                     // 锁屏自动释放：注册黑屏广播，锁屏即把麦克风还给系统
                     registerScreenOffReceiver()
                     SessionState.phase = SessionState.Phase.LISTENING
-                    Log.i(TAG, "SESSION_COMMIT 模型加载完成，会话落地开始聆听（gen=$myGen）")
+                    Log.i(TAG, "SESSION_COMMIT 模型加载完成，会话落地开始聆听（gen=${loopSession.generation} tag=${loopSession.tag}）")
                 }
             } finally {
                 // 无论落地/夭折/失败，线程结束即清在途标记，放行下一次启动（v0.55.7）
@@ -575,8 +957,14 @@ class VoiceService : Service() {
         handler.removeCallbacks(watchdogRunnable)
         handler.removeCallbacks(warnRunnable)
         handler.removeCallbacks(barResetRunnable)
-        repeatRunnable?.let { handler.removeCallbacks(it) }
-        repeatRunnable = null
+        // 2026-09-30 边界：onDestroy 兜底也留准确中止结果——正常退出路径已走 releaseAndStop
+        // （写回「会话结束」并把任务清空），这里只覆盖系统直接销毁、未走统一出口的罕见情形
+        repeatTask?.let { task ->
+            repeatRunnable?.let(handler::removeCallbacks)
+            repeatTask = null
+            repeatRunnable = null
+            task.cancel(CommandRouting.RepeatTask.CancelReason.SERVICE_DESTROYED)
+        }
         VoiceControlService.hideBar()
         releaseMicrophone()   // 兜底（正常释放路径在 releaseAndStop 里已先执行）
         micReleaseReceipt(100L)
@@ -585,6 +973,45 @@ class VoiceService : Service() {
     }
 
     /** 注册锁屏广播（SCREEN_OFF）：锁屏立即释放麦克风，保证黑屏时随时能唤起小爱 */
+    /** 读 wav → 16k mono float（M6 探针用；标准 16bit PCM，与 PC load16k 同语义） */
+    private fun readWav16k(f: java.io.File): FloatArray? {
+        return try {
+            val bytes = f.readBytes()
+            var idx = 12
+            var dataOfs = -1
+            var dataLen = 0
+            while (idx + 8 <= bytes.size) {
+                val id = String(bytes, idx, 4, Charsets.US_ASCII)
+                val len = ((bytes[idx + 4].toInt() and 0xff) or ((bytes[idx + 5].toInt() and 0xff) shl 8)
+                    or ((bytes[idx + 6].toInt() and 0xff) shl 16) or ((bytes[idx + 7].toInt() and 0xff) shl 24))
+                if (id == "data") {
+                    dataOfs = idx + 8; dataLen = len; break
+                }
+                idx += 8 + len + (len and 1)
+            }
+            if (dataOfs < 0 || dataLen < 2) return null
+            val n = dataLen / 2
+            val pcm = FloatArray(n)
+            for (i in 0 until n) {
+                val v = ((bytes[dataOfs + 2 * i].toInt() and 0xff) or (bytes[dataOfs + 2 * i + 1].toInt() shl 8))
+                pcm[i] = v / 32768f
+            }
+            pcm
+        } catch (e: Throwable) {
+            Log.w(TAG, "readWav16k 失败: ${f.path}", e)
+            null
+        }
+    }
+
+    /** 与 PC trim 同语义（阈值 0.008）——M6 探针用 */
+    private fun trimProbe(x: FloatArray): FloatArray {
+        var start = 0
+        var end = x.size - 1
+        while (start < x.size && Math.abs(x[start]) <= 0.008f) start++
+        while (end > start && Math.abs(x[end]) <= 0.008f) end--
+        return if (start >= end) x else x.copyOfRange(start, end + 1)
+    }
+
     private fun registerScreenOffReceiver() {
         runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -787,7 +1214,8 @@ class VoiceService : Service() {
         }
     }
 
-    private fun recognitionLoop() {
+    private fun recognitionLoop(loopSession: RecognitionSessionIdentity) {
+        val loopGeneration = loopSession.generation
         val v = vad ?: return
         val rec = recognizer ?: return
         val bufferSize = (SAMPLE_RATE * 0.1).toInt() // 每次读 100ms 音频
@@ -809,10 +1237,32 @@ class VoiceService : Service() {
         // 撤除后：分段回归 VAD 原生行为；起音偶缺由「再说一遍+折叠匹配（collapseDoubled/
         // collapseLeadingRepeat 保留）」兜底；防误退有三道防线（阶梯判别/FUZZY_GUARD/精确红线）。
         // 勿再回加预滚——要治起音先调 VAD 参数，实证后再动。
+        var readFailure: String? = null
+        var consecutiveEmptyReads = 0
         try {
-            while (recording) {
-                val n = audioRecord?.read(buffer, 0, buffer.size) ?: break
-                if (n <= 0) continue
+            while (recording && sessionGeneration == loopGeneration) {
+                val recorder = audioRecord
+                if (recorder == null) {
+                    if (recording) readFailure = "录音对象意外释放"
+                    break
+                }
+                val n = recorder.read(buffer, 0, buffer.size)
+                if (n < 0) {
+                    readFailure = "AudioRecord.read 返回错误 $n"
+                    Log.e(TAG, "录音读取失败：$n")
+                    break
+                }
+                if (n == 0) {
+                    consecutiveEmptyReads++
+                    if (consecutiveEmptyReads >= 10) {
+                        readFailure = "连续读取到空音频"
+                        Log.e(TAG, "录音连续 10 次返回空音频，结束本次会话")
+                        break
+                    }
+                    Thread.sleep(20L)
+                    continue
+                }
+                consecutiveEmptyReads = 0
                 val samples = FloatArray(n)
                 var sumSq = 0.0
                 for (i in 0 until n) {
@@ -829,30 +1279,99 @@ class VoiceService : Service() {
                 // VAD 检测语音段（一句话）；检测到完整一段就交给 SenseVoice 整句识别。
                 // 每句都新建 stream、用完即释放，没有状态累积，不会越跑越慢。
                 v.acceptWaveform(samples)
-                while (!v.empty()) {
+                while (recording && sessionGeneration == loopGeneration && !v.empty()) {
                     val segment = v.front()
                     v.pop()
                     val seg = segment.samples
                     if (seg.isEmpty()) continue
                     val stream = rec.createStream()
-                    stream.acceptWaveform(seg, SAMPLE_RATE)
-                    rec.decode(stream)
-                    val text = rec.getResult(stream).text
-                    stream.release()
+                    val t0 = System.nanoTime()
+                    val text = try {
+                        stream.acceptWaveform(seg, SAMPLE_RATE)
+                        rec.decode(stream)
+                        rec.getResult(stream).text
+                    } finally {
+                        stream.release()
+                    }
+                    val asrMs = (System.nanoTime() - t0) / 1_000_000L
+                    if (!recording) break
                     if (text.isNotBlank()) {
                         val clean = text.replace(" ", "")
-                        handler.post { onRecognized(clean) }
+                        if (sessionGeneration != loopGeneration) break
+                        val utteranceId = loopSession.utteranceId(++utteranceSeq)
+                        val numberRequest = NumberReviewContext.Request(utteranceId, loopGeneration,
+                            VoiceControlService.numberReviewSnapshot())
+                        // 二审在识别线程运行，结果与本句一起送主线程，避免卡住 UI 或串到下一句。
+                        // 门控（2026-09-30 M3 统一入口）：增强关闭/听写内容/说法录入/长按待命
+                        // 不请求——这些模式永远不会走到音量采纳分支，白等最多 2.5s IPC 无意义。
+                        // 2026-09-30 162 轮复核修复①：退出语义保护——普通模式下含「退出」的句子
+                        // **在请求前**跳过一切二审（m6Gate 此前对所有非空句为 true，导致原本
+                        // 不含音/声/量的退出句也要等 IPC，故障时可到超时）；长按待命的「退出只退
+                        // 待命」优先级在 onRecognized 内部（longPressMode 分支先于红线），此处
+                        // longPressMode 已被两门控排除，不改变该语义。
+                        // 2026-09-30 P1（Astra 复核）：M6 全类 shadow 独立门控；162 轮复核②：
+                        // volGate=false 时 shadow 专用结果**不得携带 inc/dec**（旧音量采纳资格
+                        // 与 shadow 结果显式隔离——本句无旧二审资格，二分类输出只作观察）
+                        val enhancedAtRecognition = AudioDecision.isEnabled(applicationContext)
+                        val recognitionMode = speechAuditMode()
+                        val reviewPlan = AudioReviewRequest.plan(clean,
+                            enhancedAtRecognition, m6ShadowEnabled,
+                            dictationMode, captureArmed, longPressMode)
+                        val volGate = reviewPlan.volume
+                        val reviewStart = SystemClock.elapsedRealtime()
+                        val decision = reviewPlan.execute { decideRemote(audioDecisionSession, seg) }
+                        val reviewWaitMs = SystemClock.elapsedRealtime() - reviewStart
+                        // 资格隔离：本句无旧音量二审资格（volGate=false）时，即使远程返回了
+                        // inc/dec（shadow 路径顺带算出的二分类输出），也剥离其采纳资格——
+                        // dispatchMatched 的音量分支只应消费有资格句的判决
+                        if (decision != null) {
+                            Log.i(TAG, "AUDIO_DECISION [$utteranceId] 候选原文=[$clean] 判决=${decision.decision} conf=${decision.confidence} latency=${decision.latencyMs}ms fallback=${decision.fallbackReason} volQualified=$volGate")
+                            DiagnosticsHelper.log("二审候选[$utteranceId]：[$clean] → ${decision.decision ?: "回退:${decision.fallbackReason}"} conf=${decision.confidence} ${decision.latencyMs}ms volQ=$volGate")
+                            DiagnosticsHelper.log("耗时[$utteranceId] asr=${asrMs}ms 二审=${decision.latencyMs}ms")
+                        } else if (asrMs > 1500L) {
+                            // M4 耗时观测：仅慢句留痕（诊断缓冲有限，正常句不刷屏）
+                            DiagnosticsHelper.log("耗时[$utteranceId] asr=${asrMs}ms（慢）")
+                        }
+                        // M6 shadow 提案（2026-09-30 D）：只算提案不改变动作——绝不参与
+                        // dispatch/lastMatch；诊断与使用记录留痕供后续离线对照（任务书 §D3）
+                        decision?.m6Top?.let { top ->
+                            val t = top.joinToString(" ") { "${it.first}:${"%.3f".format(it.second)}" }
+                            DiagnosticsHelper.log("M6候选[$utteranceId]: [$clean] $t（待旧链路由）")
+                            Log.i(TAG, "M6_SHADOW [$utteranceId] [$clean] $t")
+                        }
+                        decision?.cursorTop?.let { top ->
+                            DiagnosticsHelper.log("光标候选[$utteranceId]: [$clean] $top head=${decision.cursorHeadUs}us（待旧链与焦点检查）")
+                        }
+                        val auditCapture = SpeechAudit.Capture(audioDurationMs = seg.size * 1000L / SAMPLE_RATE,
+                            asrMs = asrMs, volumeRequested = reviewPlan.volume, m6Requested = reviewPlan.m6,
+                            reviewWaitMs = reviewWaitMs, queuedAtMs = SystemClock.elapsedRealtime(),
+                            enhancedAtRecognition = enhancedAtRecognition, modeAtRecognition = recognitionMode)
+                        handler.post { onRecognized(clean, decision, utteranceId, numberRequest, auditCapture) }
                     }
                 }
             }
         } catch (e: Exception) {
             Log.e(TAG, "识别循环异常", e)
+            if (recording) readFailure = "识别循环异常 ${e.javaClass.simpleName}"
+        } finally {
+            VoiceService.liveAmplitude = 0f
+            val failure = readFailure
+            if (failure != null && recording && sessionGeneration == loopGeneration) {
+                DiagnosticsHelper.log("录音链路中断：$failure；停止会话并释放麦克风")
+                handler.post {
+                    if (sessionGeneration != loopGeneration) return@post
+                    if (recording) releaseAndStop(failure)
+                }
+            }
         }
     }
 
-    private fun onRecognized(text: String) {
+    private fun onRecognized(text: String, decision: AudioDecisionOutcome? = null, utteranceId: String = "",
+                             numberRequest: NumberReviewContext.Request? = null,
+                             auditCapture: SpeechAudit.Capture? = null) {
         // 会话已结束（看门狗/静音/退出已释放）→ 忽略识别线程队列里残留的结果，避免退出后还触发动作
         if (!recording) return
+        if (numberRequest != null && numberRequest.generation != sessionGeneration) return
         SessionState.lastText = text
         // 自定义说法录入（v0.39.0）：第一句原文到手立即还麦，绑定页轮询取走确认绑定
         if (captureArmed) {
@@ -863,39 +1382,56 @@ class VoiceService : Service() {
             releaseAndStop("说法录入完成")
             return
         }
-        SessionState.phase = SessionState.Phase.EXECUTING   // 主页状态卡：正在执行
-        val before = SessionState.lastMatch
-        handleRecognized(text)
-        // lastMatch 没动（语气词等静默忽略）→ 直接回聆听，不拿旧结果重演「已完成」
-        if (!recording) return
-        if (SessionState.lastMatch != before) settlePhase()
-        else SessionState.phase = SessionState.Phase.LISTENING
-    }
-
-    /**
-     * 执行落地四态（主页状态卡）：lastMatch 带 ✅ → 已完成，停留 1.2s 自动回聆听态；
-     * 其余（模式切换/延期等提示，或未成功）不冒充失败，直接回聆听态——
-     * 顶部胶囊已有实时反馈，状态卡只报喜不报吓人的红叉。
-     * 退出/看门狗路径已把 phase 置 IDLE，这里检测到会话结束就不覆盖。
-     */
-    private fun settlePhase() {
-        if (!recording) return
-        if (SessionState.lastMatch.contains("✅")) {
-            SessionState.phase = SessionState.Phase.DONE
-            handler.postDelayed({
-                if (recording) SessionState.phase = SessionState.Phase.LISTENING
-            }, PHASE_DONE_MILLIS)
-        } else {
-            SessionState.phase = SessionState.Phase.LISTENING
+        currentAudioDecision = decision
+        currentNumberRequest = numberRequest
+        currentDecisionDisposition = null
+        currentDecisionLabel = null
+        // 诊断失败不能改变执行；既不新增模型请求，也不按模型分数制造“正确答案”。
+        currentSpeechAudit = if (utteranceId.isBlank()) null else runCatching {
+            val liveSnapshot = VoiceControlService.numberReviewSnapshot()
+            SpeechAudit.Recorder(utteranceId, SpeechAudit.Context(speechAuditMode(), AudioDecision.isEnabled(this),
+                m6ShadowEnabled, sessionGeneration, "$sessionTag-u$utteranceSeq",
+                VoiceControlService.isLabelsVisible(), VoiceControlService.isGridShowing(), liveSnapshot?.targets?.size,
+                SpeechAudit.snapshotToken(numberRequest?.snapshot), SpeechAudit.snapshotToken(liveSnapshot)),
+                auditCapture ?: SpeechAudit.Capture(source = "synthetic_injection"), decision,
+                speechAssetFingerprint, SystemClock.elapsedRealtime())
+        }.getOrNull()
+        try { handleRecognized(text, utteranceId) } finally {
+            if (decision != null) {
+                val disposition = currentDecisionDisposition ?: "本句未采纳声音改判或救回"
+                val label = currentDecisionLabel ?: "未参与"
+                // 全局lastMatch可能还是上一句话；账目只取本句，不能拿旧✅充当新句结果。
+                val ownResult = if (utteranceId.isNotBlank()) UsageLog.all().lastOrNull { it.uid == utteranceId }?.text
+                    else SessionState.lastMatch
+                val finalResult = ownResult?.takeIf { it.isNotBlank() } ?: "本句未记录动作结果"
+                UsageLog.attachAudioDecision(
+                    utteranceId, text, label,
+                    "音量判决=${decision.decision ?: "回退:${decision.fallbackReason ?: "未判定"}"}; " +
+                        "置信度=${decision.confidence?.let { "%.3f".format(java.util.Locale.US, it) } ?: "无"}; " +
+                        "耗时=${decision.latencyMs}ms(encoder=${decision.encoderMs}ms, head=${decision.headMs}ms); " +
+                        "M6候选=${decision.m6Top}; 数字候选=${decision.numTop}; 分段数字候选=${decision.numSegmentTop}; 分段头=${decision.numSegmentHeadUs}us; 4/10候选=${decision.numPairTop}; 4/10头=${decision.numPairHeadUs}us; 光标候选=${decision.cursorTop}; 光标头=${decision.cursorHeadUs}us; " +
+                        "$disposition; 结果=$finalResult"
+                )
+            }
+            runCatching {
+                currentSpeechAudit?.let { UsageLog.attachSpeechAudit(utteranceId, it.json(currentDecisionDisposition)) }
+            }.onFailure { Log.w(TAG, "本句诊断记录失败，不影响识别", it) }
+            currentSpeechAudit = null
+            currentAudioDecision = null
+            currentNumberRequest = null
+            currentDecisionDisposition = null
+            currentDecisionLabel = null
         }
+        // 2026-10-03：单句反馈留在胶囊/记录，不再推进主页完成态或安排1.2秒回切。
     }
 
-    private fun handleRecognized(text: String) {
-        Log.i(TAG, "识别结果: $text")
+    private fun handleRecognized(text: String, utteranceId: String = "") {
+        Log.i(TAG, "识别结果[$utteranceId]: $text")
         updateNotification("🔴 会话中 · 你说：${text.take(15)}")
         // 使用记录（v0.57.0）：每句识别原文先落一条，本句后续 lastMatch 赋值自动关联同条；
-        // 未触发操作的句子（语气词/未命中）显示「未触发操作」——用户可对出「说了什么被听成什么」
-        UsageLog.appendHeard(text)
+        // 未触发操作的句子（语气词/未命中）显示「未触发操作」——用户可对出「说了什么被听成什么」。
+        // v0.58：带 utteranceId 关联（同文本连说两遍不再串条目）
+        UsageLog.appendHeard(text, utteranceId)
 
         // 长按待命模式优先：数字→长按编号 / 中间→长按屏幕 / 退出→取消长按（不结束会话）
         if (longPressMode) {
@@ -910,44 +1446,49 @@ class VoiceService : Service() {
         }
 
         // 听写模式（v0.40.0）：本句为听写内容——写进输入框后自动回到普通命令聆听。
-        // 放在语气词过滤之前：用户说的内容原样落笔（含语气词），只让路给「退出」红线
+        // 放在语气词过滤之前：用户说的内容原样落笔（含语气词），只让路给「退出」红线。
+        // 意图分类已提取到 CommandRouting.planDictationContent（2026-09-29 收尾项3，纯函数）；
+        // 此处只保留执行与文案。
         if (dictationMode) {
             handler.removeCallbacks(dictationTimeoutRunnable)
             dictationMode = false
-            if (text.contains("取消")) {
-                VoiceControlService.updateBar("🎤 已取消输入")
-                SessionState.lastMatch = "→ 已取消输入"
-                return
-            }
-            // v0.56.25：内容句恰好是文字编辑命令（删除/清空/光标移动等）→ 按编辑执行，
-            // 不作为文字落笔。治连环坑：说「删除」被听成「输入」进了听写，再说「删除」
-            // 又被打成本字。
-            val trimmed = text.trim().trim('，', '。', '！', '？', '…', ',', '.', '!', '?').trim()
-            if (trimmed == "输入") {
-                // v0.56.30：内容句说了「输入」→ 几乎总是想继续听写（而非打字面词）——
-                // 重新武装听写，不打字面
-                dictationMode = true
-                handler.removeCallbacks(dictationTimeoutRunnable)
-                handler.postDelayed(dictationTimeoutRunnable, 12_000L)
-                VoiceControlService.updateBar("✍️ 继续听写（说完停顿即填入）")
-                SessionState.lastMatch = "→ 继续听写"
-                return
-            }
-            if (trimmed in TEXT_EDIT_WORDS) {
-                VoiceControlService.updateBar("✂️ 编辑（听写中）：$trimmed")
-                SessionState.lastMatch = "→ 听写中执行编辑：$trimmed"
-            } else {
-                // 常用词纠错（v0.42.0）：识别原文里与常用词拼音相近的片段改写为常用词（只作用听写内容）
-                val corrected = CustomVocab.correctText(text, CustomVocab.all(applicationContext))
-                if (corrected != text) Log.i(TAG, "听写纠错: [$text] -> [$corrected]")
-                val ok = VoiceControlService.textInsert(corrected)
-                VoiceControlService.updateBar(if (ok) "✍️ 已输入：${corrected.take(12)}" else "⚠️ 未找到输入框")
-                SessionState.lastMatch = if (ok) "→ 输入「$corrected」✅" else "→ 未找到输入框"
-                if (ok) {
-                    lastInsertAt = SystemClock.elapsedRealtime()
-                    vibrateFeedback()
+            when (val dp = CommandRouting.planDictationContent(text)) {
+                is CommandRouting.DictationContentDecision.CancelDictation -> {
+                    VoiceControlService.updateBar("🎤 已取消输入")
+                    SessionState.lastMatch = "→ 已取消输入"
+                    return
                 }
-                return
+                is CommandRouting.DictationContentDecision.ContinueDictation -> {
+                    // v0.56.30：内容句说了「输入」→ 几乎总是想继续听写（而非打字面词）——
+                    // 重新武装听写，不打字面
+                    dictationMode = true
+                    handler.removeCallbacks(dictationTimeoutRunnable)
+                    handler.postDelayed(dictationTimeoutRunnable, 12_000L)
+                    VoiceControlService.updateBar("✍️ 继续听写（说完停顿即填入）")
+                    SessionState.lastMatch = "→ 继续听写"
+                    return
+                }
+                is CommandRouting.DictationContentDecision.EditInDictation -> {
+                    // v0.56.25 连环坑：内容句恰好是文字编辑命令（删除/清空/光标移动）→ 按编辑执行，
+                    // 不作为文字落笔。此处只报文案；**执行走下方正常命令链**（strict 必中该编辑词）——
+                    // 保持既有 fall-through 语义，勿加 return
+                    VoiceControlService.updateBar("✂️ 编辑（听写中）：${dp.word}")
+                    SessionState.lastMatch = "→ 听写中执行编辑：${dp.word}"
+                }
+                is CommandRouting.DictationContentDecision.InsertText -> {
+                    // 常用词纠错（v0.42.0）：识别原文里与常用词拼音相近的片段改写为常用词（只作用听写内容）
+                    val corrected = CustomVocab.correctText(dp.text, CustomVocab.all(applicationContext))
+                    if (corrected != dp.text) Log.i(TAG, "听写纠错: [${dp.text}] -> [$corrected]")
+                    val ok = VoiceControlService.textInsert(corrected)
+                    VoiceControlService.updateBar(if (ok) "✍️ 已输入：${corrected.take(12)}" else "⚠️ 未找到输入框")
+                    SessionState.lastMatch = if (ok) "→ 输入「$corrected」✅" else "→ 未找到输入框"
+                    if (ok) {
+                        noteUserActionDispatched()   // 输入框内容已变，旧重复的点击目标可能失效
+                        lastInsertAt = SystemClock.elapsedRealtime()
+                        vibrateFeedback()
+                    }
+                    return
+                }
             }
         }
 
@@ -998,10 +1539,11 @@ class VoiceService : Service() {
         // 整词精确命中词表命令的句子永远按命令走，不进听写考场——容差边界再怎么调都不可能
         // 劫持正式命令（v0.57.10「删除」踩线反例治本）。注意只认 exact：contains 不算
         // （「输入」被「清空输入」contains 命中，但不能因此拦掉真听写）。
+        // 综合判定已提取为 shouldArmDictation（2026-09-29 收尾项3，纯函数）。
         // v0.57.10 输入框在场前置（用户拍板「识别到对话框才能说打字」）：无「可见可交互」输入框时
         // **整句静默**——实测「输入」会掉进 contains 反向匹配被「清空输入」劫持、
         // 执行失败报「未找到输入框」；无框页面说触发词没有任何合理意图。
-        if (isDictationTrigger(text) && currentMatcher().matchExact(text) == null) {
+        if (shouldArmDictation(text, currentMatcher())) {
             if (!VoiceControlService.hasVisibleEditable()) {
                 Log.i(TAG, "听写触发但屏幕无输入框，整句静默: [$text]")
                 return
@@ -1014,165 +1556,247 @@ class VoiceService : Service() {
             return
         }
 
-        // 替换命令（v0.41.0）：「把X替换成Y/换成Y/改成Y」——精确找词 → 拼音模糊滑窗
-        // （治照读屏幕错字却被听岔：拼音同即命中）。找不到原词不静默，明确提示
-        REPLACE_REGEX.find(text)?.let { m ->
-            val find = m.groupValues[1].replace(" ", "")
-            val repl = m.groupValues[2].replace(" ", "")
-            val cur = VoiceControlService.currentEditableText()
-            if (cur == null) {
-                VoiceControlService.updateBar("⚠️ 未找到输入框")
-                SessionState.lastMatch = "→ 未找到输入框"
-            } else {
-                val range = if (cur.contains(find)) {
-                    IntRange(cur.indexOf(find), cur.indexOf(find) + find.length - 1)
+        // ===== 统一判断入口（2026-09-29 全指令收敛轮）=====
+        // 候选+参数+当前模式/页面条件+歧义全部在 CommandRouting.planCommand 一处判定——
+        // 生产与离线回归（ProductionRoutingCorpusTest/ParameterRecoveryTest 等用例）调用
+        // 同一函数，不存在只供测试的第二套路由。此处只保留执行调度与用户反馈；
+        // 改判定次序必须改 planCommand 并跑全量语料回归。
+        val planCtx = CommandRouting.UtteranceContext(
+            gridShowing = VoiceControlService.isGridShowing(),
+            labelsVisible = VoiceControlService.isLabelsVisible(),
+            lastActionPresent = lastAction != null,
+            visibleLabelCount = if (VoiceControlService.isLabelsVisible())
+                VoiceControlService.visibleLabelCount() else null,
+            gridCellCount = VoiceControlService.GRID_COLS * VoiceControlService.GRID_ROWS,
+        )
+        val plan = CommandRouting.planCommand(text, planCtx, currentMatcher())
+        currentSpeechAudit?.planned(plan)
+        when (plan) {
+            is CommandRouting.Decision.Replace -> {
+                // 替换（v0.41.0）：精确找词 → 拼音模糊滑窗（治照读屏幕错字被听岔）。找不到原词不静默
+                val cur = VoiceControlService.currentEditableText()
+                if (cur == null) {
+                    VoiceControlService.updateBar("⚠️ 未找到输入框")
+                    SessionState.lastMatch = "→ 未找到输入框"
                 } else {
-                    CommandMatcher.findFuzzyRange(cur, find)
-                }
-                if (range == null) {
-                    VoiceControlService.updateBar("⚠️ 输入框中没有「$find」")
-                    SessionState.lastMatch = "→ 没有找到「$find」"
-                } else {
-                    val ok = VoiceControlService.textReplaceRange(range.first, range.last + 1, repl)
-                    VoiceControlService.updateBar(if (ok) "🔁 已替换为「$repl」" else "🎤 识别：$text")
-                    SessionState.lastMatch = if (ok) "→ 把「$find」替换为「$repl」✅" else "→ 替换失败"
-                    if (ok) vibrateFeedback()
+                    val range = if (cur.contains(plan.find)) {
+                        IntRange(cur.indexOf(plan.find), cur.indexOf(plan.find) + plan.find.length - 1)
+                    } else {
+                        CommandMatcher.findFuzzyRange(cur, plan.find)
+                    }
+                    if (range == null) {
+                        VoiceControlService.updateBar("⚠️ 输入框中没有「${plan.find}」")
+                        SessionState.lastMatch = "→ 没有找到「${plan.find}」"
+                    } else {
+                        val ok = VoiceControlService.textReplaceRange(range.first, range.last + 1, plan.replacement)
+                        if (ok) noteUserActionDispatched()   // 输入框内容已变，旧重复的点击目标可能失效
+                        VoiceControlService.updateBar(if (ok) "🔁 已替换为「${plan.replacement}」" else "🎤 识别：$text")
+                        SessionState.lastMatch = if (ok) "→ 把「${plan.find}」替换为「${plan.replacement}」✅" else "→ 替换失败"
+                        if (ok) vibrateFeedback()
+                    }
                 }
             }
-            return
-        }
-
-        // 「重复一次」常被 ASR 听成「过一次/不一次/试一次」（音节丢失），宽松兜底按重复处理
-        val repeatCount = extractRepeatCount(text)
-            ?: extractLooseRepeat(text)
-        if (repeatCount != null) {
-            handleRepeat(repeatCount)
-        } else {
-            // 网格：先「点击 N」= 一步式点击第 N 格；否则「第 N 格/网格 N/纯数字」= 缩放；
-            // 「长按 N」= 网格长按第 N 格（v0.57.19 用户需求：无编号页面的精确定位长按，
-            // 网格显示时数字意图归格子，与点击同哲学；须先于缩放判定否则「第N格」会撞缩放）
-            val gridShowing = VoiceControlService.isGridShowing()
-            val gridLP = if (gridShowing) extractGridLongPressNumber(text) else null
-            val gridTap = if (gridLP == null && gridShowing) extractGridTapCell(text) else null
-            val gridNum = if (gridLP == null && gridTap == null) extractGridNumber(text, gridShowing) else null
-            if (gridLP != null) {
-                val ok = VoiceControlService.longPressGridCell(gridLP)
+            is CommandRouting.Decision.Repeat -> {
+                if (plan.recovered) {
+                    DiagnosticsHelper.log("重复恢复[$utteranceId]: $text -> ${plan.times} 次; 编号=${planCtx.labelsVisible}, 网格=${planCtx.gridShowing}")
+                }
+                handleRepeat(plan.times, utteranceId)
+            }
+            is CommandRouting.Decision.GridLongPress -> {
+                val ok = VoiceControlService.longPressGridCell(plan.cell)
                 if (ok) {
+                    noteUserActionDispatched()   // 新命令取消旧重复（防旧点击在新页面继续执行）
                     VoiceControlService.lastGridTapPoint?.let { p ->
                         lastAction = LastAction.LongPressPoint(p.first, p.second)
                     }
                 }
-                VoiceControlService.updateBar(if (ok) "⚡ 长按第 $gridLP 格" else "🎤 识别：$text")
-                SessionState.lastMatch = if (ok) "→ 长按第 $gridLP 格 ✅" else "→ 长按第 $gridLP 格"
-            } else if (gridTap != null) {
-                val ok = VoiceControlService.tapGridCell(gridTap)
+                VoiceControlService.updateBar(if (ok) "⚡ 长按第 ${plan.cell} 格" else "🎤 识别：$text")
+                SessionState.lastMatch = if (ok) "→ 长按第 ${plan.cell} 格 ✅" else "→ 长按第 ${plan.cell} 格"
+            }
+            is CommandRouting.Decision.GridTapCell -> {
+                if (plan.restored) {
+                    DiagnosticsHelper.log("编号恢复[$utteranceId]: $text -> 第 ${plan.cell} 格（网格范围=${planCtx.gridCellCount}）")
+                }
+                val note = if (plan.restored) "（编号校正）" else ""
+                val ok = VoiceControlService.tapGridCell(plan.cell)
                 if (ok) {
+                    noteUserActionDispatched()
                     // 记住网格点击的落点，「重复一次」可在同一位置再点（用户明确指令，非自动重试）
                     VoiceControlService.lastGridTapPoint?.let { p ->
                         lastAction = LastAction.TapPoint(p.first, p.second)
                     }
                 }
-                VoiceControlService.updateBar(if (ok) "⚡ 点击第 $gridTap 格" else "🎤 识别：$text")
-                SessionState.lastMatch = if (ok) "→ 点击第 $gridTap 格 ✅" else "→ 点击第 $gridTap 格"
-            } else if (gridNum != null) {
-                val ok = VoiceControlService.zoomGrid(gridNum)
-                VoiceControlService.updateBar(if (ok) "⚡ 缩放到第 $gridNum 格" else "⚠️ 已到最小格，无法再缩")
-                SessionState.lastMatch = if (ok) "→ 缩放到第 $gridNum 格 ✅" else "→ 已到最小格"
-            } else {
-                // 编号点击：点击 N / 点第 N 个 / 第 N 个；编号显示时纯数字 N 也直接点（快捷模式）
-                // 编号显示时对短音节误识别（如「四是」=4+10）也按数字意图处理——
-                // 否则会掉进文字点击通道去页面搜「四是」（搜不到被忽略，用户看起来像没反应）
-                val tapNum = extractTapNumber(text)
-                    ?: if (VoiceControlService.isLabelsVisible())
-                        extractBareNumber(text) ?: extractBareNumberLoose(text) else null
-                if (tapNum != null) {
-                    val ok = VoiceControlService.tapLabel(tapNum)
-                    if (ok) lastAction = LastAction.TapLabel(tapNum)
-                    VoiceControlService.updateBar(if (ok) "⚡ 点击编号 $tapNum" else "🎤 识别：$text")
-                    SessionState.lastMatch = if (ok) "→ 点击编号 $tapNum ✅ 已执行" else "→ 点击编号 $tapNum"
+                VoiceControlService.updateBar(if (ok) "⚡ 点击第 ${plan.cell} 格$note" else "⚠️ 第 ${plan.cell} 格未执行")
+                SessionState.lastMatch = if (ok) "→ 点击第 ${plan.cell} 格 ✅$note" else "→ 点击第 ${plan.cell} 格：未执行$note"
+            }
+            is CommandRouting.Decision.GridZoom -> {
+                val ok = VoiceControlService.zoomGrid(plan.cell)
+                if (ok) noteUserActionDispatched()   // 缩放改变网格层级，旧重复的点位已失效
+                VoiceControlService.updateBar(if (ok) "⚡ 缩放到第 ${plan.cell} 格" else "⚠️ 已到最小格，无法再缩")
+                SessionState.lastMatch = if (ok) "→ 缩放到第 ${plan.cell} 格 ✅" else "→ 已到最小格"
+            }
+            is CommandRouting.Decision.TapNumber -> {
+                if (plan.restored) {
+                    DiagnosticsHelper.log("编号恢复[$utteranceId]: $text -> 编号 ${plan.number}（范围=${planCtx.visibleLabelCount}）")
+                }
+                var note = if (plan.restored) "（编号校正）" else ""
+                // 数字复核（nn 轮 2026-09-30 路径①）：文字选到了存在但错误的编号时，在首次
+                // tapLabel 之前用数字头纠正（独立验收 7 纠正/0 误伤/0 负例触发/0 新增错误执行）。
+                // 2026-10-01：4/10/other专用头仅补旧数字头弃权，≥.995且领先≥.99才改号。
+                // 冻结新验收新增1个原音/条件的4→10救回、0新增改错；尚不是用户真人效果证明。
+                // 失败/未加载/低分→保持文字编号（回退语义）；失败后不补点（幂等红线）。
+                val result = numberTapDispatcher.dispatch(plan.number, text, currentAudioDecision?.numTop, currentNumberRequest,
+                    NumberReviewContext.Live("$sessionTag-u$utteranceSeq", sessionGeneration,
+                        AudioDecision.isEnabled(this), recording && !stopRequested,
+                        !dictationMode && !captureArmed && !longPressMode,
+                        VoiceControlService.numberReviewSnapshot()), pairAudio = currentAudioDecision?.numPairTop,
+                    confirmation = currentAudioDecision?.numSegmentTop,
+                    tap = VoiceControlService::tapLabel)
+                if (!result.attempted) {
+                    currentSpeechAudit?.rejected(result.rejection ?: "number_not_attempted")
+                    return
+                }
+                currentSpeechAudit?.dispatched(SpeechAudit.Route("tap_number", result.number), result.dispatched, result.rejection)
+                val tapTarget = result.number
+                result.correction?.let { correction ->
+                    note = "（编号复核：${correction.fromNumber}→${correction.toNumber}）"
+                    currentDecisionLabel = "已修改为点击编号 ${correction.toNumber}"
+                    currentDecisionDisposition = "数字改号：${correction.fromNumber}→${correction.toNumber}"
+                    DiagnosticsHelper.log("数字复核[$utteranceId]: $text ${correction.fromNumber}→${correction.toNumber}")
+                }
+                result.rejection?.let { DiagnosticsHelper.log("数字复核拒绝[$utteranceId]: $it") }
+                if (result.correction == null && result.rejection?.startsWith("number_") == true) {
+                    currentDecisionLabel = "声音有分歧或无把握，保留编号 $tapTarget"
+                    currentDecisionDisposition = "数字改号未采用：${result.rejection}；实际编号=$tapTarget"
+                }
+                val ok = result.dispatched
+                if (ok) {
+                    noteUserActionDispatched()
+                    lastAction = LastAction.TapLabel(tapTarget)
+                }
+                VoiceControlService.updateBar(if (ok) "⚡ 点击编号 $tapTarget$note" else "⚠️ 编号 $tapTarget 未执行")
+                SessionState.lastMatch = if (ok) "→ 点击编号 $tapTarget ✅ 已执行$note" else "→ 点击编号 $tapTarget：未执行$note"
+            }
+            is CommandRouting.Decision.LongPressNumber -> {
+                // 2026-09-30：doLongPressLabel 已同步化（越界/无窗口同步返回 false），
+                // 失败反馈对齐编号点击口径（未执行），不再显示「识别原文」误导；
+                // 成功后登记长按点位为「上一个动作」——否则「重复一次」会误放更早的动作
+                val ok = VoiceControlService.longPressLabel(plan.number)
+                if (ok) {
+                    noteUserActionDispatched()
+                    VoiceControlService.lastLongPressPoint?.let { p ->
+                        lastAction = LastAction.LongPressPoint(p.first, p.second)
+                    }
+                }
+                VoiceControlService.updateBar(if (ok) "⚡ 长按编号 ${plan.number}" else "⚠️ 长按编号 ${plan.number} 未执行")
+                SessionState.lastMatch = if (ok) "→ 长按编号 ${plan.number} ✅" else "→ 长按编号 ${plan.number}：未执行"
+            }
+            is CommandRouting.Decision.LongPressText -> {
+                // 目标先经 App 名热词纠错，再长按文字；失败回退精确/模糊命令（executor 路径）
+                val target = currentMatcher().resolveClosest(plan.target, APP_HOTWORDS) ?: plan.target
+                if (VoiceControlService.longPressText(target)) {
+                    noteUserActionDispatched()
+                    // 2026-09-30：成功登记长按点位（重复回放同一点位，不再误放更早动作）
+                    VoiceControlService.lastLongPressPoint?.let { p ->
+                        lastAction = LastAction.LongPressPoint(p.first, p.second)
+                    }
+                    VoiceControlService.updateBar("⚡ 长按「$target」")
+                    SessionState.lastMatch = "→ 长按「$target」 ✅"
                 } else {
-                    // 长按编号：长按 N / 长按 12 / 长按第 N 个（编号模式）
-                    val lpNum = extractLongPressNumber(text)
-                    if (lpNum != null) {
-                        val ok = VoiceControlService.longPressLabel(lpNum)
-                        VoiceControlService.updateBar(if (ok) "⚡ 长按编号 $lpNum" else "🎤 识别：$text")
-                        SessionState.lastMatch = if (ok) "→ 长按编号 $lpNum ✅" else "→ 长按编号 $lpNum"
+                    // 长按文字失败 → 回退精确命令（「按住不动」这类无参长按）
+                    val strict = currentMatcher().matchStrictDetailed(text)
+                    if (strict.ambiguous) {
+                        Log.i(TAG, "同分歧义，忽略: [$text] 冲突词=${strict.tiedWords}")
+                        DiagnosticsHelper.log("同分歧义已忽略: $text（${strict.tiedWords.joinToString("/")}）")
+                        persistMiss(text)
+                    } else if (strict.match != null) {
+                        Log.i(TAG, "匹配: [$text] -> ${strict.match.matchedWord} (${strict.match.method})")
+                        dispatchMatched(strict.match)
                     } else {
-                        // 长按文字：长按抖音 / 按住抖音
-                        val lpText = extractLongPressText(text)
-                        if (lpText != null) {
-                            val target = currentMatcher().resolveClosest(lpText, APP_HOTWORDS) ?: lpText
-                            if (VoiceControlService.longPressText(target)) {
-                                VoiceControlService.updateBar("⚡ 长按「$target」")
-                                SessionState.lastMatch = "→ 长按「$target」 ✅"
-                            } else {
-                                // 长按文字失败 → 回退精确命令（「按住不动」这类无参长按）
-                                val strict = currentMatcher().matchStrict(text)
-                                if (strict != null) {
-                                    Log.i(TAG, "匹配: [$text] -> ${strict.matchedWord} (${strict.method})")
-                                    dispatchMatched(strict)
-                                } else {
-                                    val fuzzy = currentMatcher().matchFuzzy(text)
-                                    if (fuzzy != null) {
-                                        Log.i(TAG, "匹配: [$text] -> ${fuzzy.matchedWord} (${fuzzy.method})")
-                                        dispatchMatched(fuzzy)
-                                    } else {
-                                        // 长按文字没找到：同样静默忽略（商用原则同上）
-                                        Log.i(TAG, "长按未命中，忽略: [$text]")
-                                        DiagnosticsHelper.log("长按未命中: $text")
-                                    }
-                                }
-                            }
+                        val fuzzy = matchFuzzySafely(text)
+                        if (fuzzy != null) {
+                            Log.i(TAG, "匹配: [$text] -> ${fuzzy.matchedWord} (${fuzzy.method})")
+                            dispatchMatched(fuzzy)
                         } else {
-                            // 分层匹配：精确命令 → 文字点击（说屏幕文字/App 名）→ 拼音兜底纠错命令
-                            val strict = currentMatcher().matchStrict(text)
-                            if (strict != null) {
-                                Log.i(TAG, "匹配: [$text] -> ${strict.matchedWord} (${strict.method})")
-                                dispatchMatched(strict)
-                            } else {
-                                val rawTarget = extractTextToTap(text)
-                                if (rawTarget != null) {
-                                    // 目标先经 App 名热词纠错（「抖婴」→「抖音」），再按屏幕文字点击
-                                    val target = currentMatcher().resolveClosest(rawTarget, APP_HOTWORDS) ?: rawTarget
-                                    if (VoiceControlService.tapText(target)) {
-                                        VoiceControlService.updateBar("⚡ 点击「$target」")
-                                        SessionState.lastMatch = "→ 点击「$target」 ✅"
-                                        // 文字点击成功也登记为可重复（v0.55）：媒体播放器里
-                                        // 「暂停」就是文字点击，「重复一次」复点同一位置即可切回
-                                        VoiceControlService.lastTextTapPoint?.let { p ->
-                                            lastAction = LastAction.TapPoint(p.first, p.second)
-                                        }
-                                    } else {
-                                        val fuzzy = currentMatcher().matchFuzzy(text)
-                                        if (fuzzy != null) {
-                                            Log.i(TAG, "匹配: [$text] -> ${fuzzy.matchedWord} (${fuzzy.method})")
-                                            dispatchMatched(fuzzy)
-                                        } else {
-                                            // 屏幕文字没找到：不操作也不提示，安静继续聆听（只记日志供诊断）。
-                                            // 商用原则：误识别不展示给用户，否则用户会怀疑自己普通话不标准
-                                            Log.i(TAG, "未命中，忽略: [$text]")
-                                            DiagnosticsHelper.log("文字未命中: $text")
-                                        }
-                                    }
-                                } else {
-                                    val fuzzy = currentMatcher().matchFuzzy(text)
-                                    if (fuzzy != null) {
-                                        Log.i(TAG, "匹配: [$text] -> ${fuzzy.matchedWord} (${fuzzy.method})")
-                                        dispatchMatched(fuzzy)
-                                    } else {
-                                        // 未命中任何命令：静默继续聆听，不回显 ASR 原文（商用原则同上）。
-                                        // 原文进诊断缓冲（v0.55.3）：胶囊不吭声不挫败，导出反馈可见
-                                        // 「这句话被听成了什么」，用真实听岔样本精填相似词表
-                                        Log.i(TAG, "未匹配，忽略: [$text]")
-                                        DiagnosticsHelper.log("命令未匹配: $text")
-                                        // v0.56.26：听岔样本持久落盘（内存缓冲重启即失）——
-                                        // 积累真实误识别原文，供按用户口音建定向纠错表
-                                        persistMiss(text)
-                                    }
-                                }
-                            }
+                            // 长按文字没找到：同样静默忽略（商用原则）
+                            Log.i(TAG, "长按未命中，忽略: [$text]")
+                            DiagnosticsHelper.log("长按未命中: $text")
                         }
                     }
+                }
+            }
+            is CommandRouting.Decision.DispatchCommand -> {
+                Log.i(TAG, "匹配: [$text] -> ${plan.matchedWord} (${plan.method})")
+                dispatchMatched(plan.match)
+            }
+            is CommandRouting.Decision.TapText -> {
+                // 目标先经 App 名热词纠错（「抖婴」→「抖音」），再按屏幕文字点击
+                val target = currentMatcher().resolveClosest(plan.target, APP_HOTWORDS) ?: plan.target
+                val tapStatus = VoiceControlService.tapTextDetailed(target)
+                currentSpeechAudit?.textTap(tapStatus)
+                if (tapStatus == SilentCommandRecovery.TextTapStatus.DISPATCHED) {
+                    noteUserActionDispatched()
+                    VoiceControlService.updateBar("⚡ 点击「$target」")
+                    SessionState.lastMatch = "→ 点击「$target」 ✅"
+                    // 文字点击成功也登记为可重复（v0.55）：媒体播放器里「暂停」就是文字点击
+                    VoiceControlService.lastTextTapPoint?.let { p ->
+                        lastAction = LastAction.TapPoint(p.first, p.second)
+                    }
+                } else {
+                    // 屏幕上没找到该文字 → 模糊兜底（executor 回退路径，不在 planCommand）
+                    val fuzzyResult = matchFuzzyOutcomeSafely(text)
+                    // 2026-10-01：完整“数字+号”在文字目标不存在时恢复编号语义。
+                    // 标准显示编号的模糊误路由可替换；绑定/其他动作/歧义不抢。
+                    if (tryNumberSuffixRecovery(plan, text, utteranceId, tapStatus, fuzzyResult)) return
+                    val fuzzy = fuzzyResult.match.takeUnless { fuzzyResult.ambiguous }
+                    if (fuzzy != null) {
+                        Log.i(TAG, "匹配: [$text] -> ${fuzzy.matchedWord} (${fuzzy.method})")
+                        dispatchMatched(fuzzy)
+                    } else {
+                        if (tryM6Recovery(plan, text, utteranceId, tapStatus, fuzzyResult)) return
+                        if (tryNumberRecovery(plan, text, utteranceId, tapStatus, fuzzyResult)) return
+                        // 屏幕文字没找到：不操作也不提示，安静继续聆听（只记日志供诊断）。
+                        // 商用原则：误识别不展示给用户
+                        Log.i(TAG, "未命中，忽略: [$text]")
+                        DiagnosticsHelper.log("文字未命中: $text")
+                    }
+                }
+            }
+            is CommandRouting.Decision.Ambiguous -> {
+                currentSpeechAudit?.rejected("ambiguous")
+                if (plan.original != null && plan.alternative != null) {
+                    // 编号候选歧义（「点七六」范围内 76 与 6 都合法）：明确反馈并结束本句，
+                    // 绝不落入文字点击/模糊匹配重新猜目标（原 resolveTapForExecution 语义）
+                    DiagnosticsHelper.log("编号歧义[$utteranceId]: $text -> ${plan.original}/${plan.alternative}; 范围=${plan.range}")
+                    VoiceControlService.updateBar("⚠️ 编号不明确，请说「第${plan.alternative}个」或完整编号")
+                    SessionState.lastMatch = "→ 编号 ${plan.original}/${plan.alternative} 不明确，未执行"
+                    handler.removeCallbacks(barResetRunnable)
+                    handler.postDelayed(barResetRunnable, 1500L)
+                    return
+                }
+                // 词表同分歧义：不按词表顺序替用户拍板，也不许文字点击/拼音模糊重猜。静默忽略留痕。
+                Log.i(TAG, "同分歧义，忽略: [$text] 冲突词=${plan.tiedWords}")
+                DiagnosticsHelper.log("同分歧义已忽略: $text（${plan.tiedWords.joinToString("/")}）")
+                persistMiss(text)
+            }
+            is CommandRouting.Decision.NoMatch -> {
+                // 模糊兜底（executor 回退路径）：仍无命中 → 静默继续聆听
+                val fuzzyResult = matchFuzzyOutcomeSafely(text)
+                val fuzzy = fuzzyResult.match.takeUnless { fuzzyResult.ambiguous }
+                if (fuzzy != null) {
+                    Log.i(TAG, "匹配: [$text] -> ${fuzzy.matchedWord} (${fuzzy.method})")
+                    dispatchMatched(fuzzy)
+                } else {
+                    if (tryM6Recovery(plan, text, utteranceId,
+                            SilentCommandRecovery.TextTapStatus.NOT_ATTEMPTED, fuzzyResult)) return
+                    if (tryNumberRecovery(plan, text, utteranceId,
+                            SilentCommandRecovery.TextTapStatus.NOT_ATTEMPTED, fuzzyResult)) return
+                    // 未命中任何命令：静默继续聆听，不回显 ASR 原文（商用原则）。
+                    // 原文进诊断缓冲（v0.55.3），并持久落盘（v0.56.26）积累真实听岔样本
+                    Log.i(TAG, "未匹配，忽略: [$text]")
+                    DiagnosticsHelper.log("命令未匹配: $text")
+                    currentSpeechAudit?.ignored(if (fuzzyResult.ambiguous) "fuzzy_ambiguous" else "complete_chain_no_match")
+                    persistMiss(text)
                 }
             }
         }
@@ -1203,137 +1827,10 @@ class VoiceService : Service() {
         updateNotification("🔴 会话中 · 已延长（剩余 $remaining 次）")
     }
 
-    /** 编号点击匹配：点击 5 / 点第 5 个 / 第 5 个（排除「点一下」这类无参数点击） */
-    // v0.57.13：「击」被 ASR 听岔成辑/直等（j/zh 混淆，2026-09-23 用户实测「点击4」→「点辑四」
-    // 「点直是」），「点击」前缀断裂致编号通道失配、掉进 fuzzy 命中「点一下」——「点」后容忍
-    // 至多 1 个杂音字再取数字。防误触关卡不变：数字后跟「下」一律拒（点一下/点两下/点三下），
-    // 正则回溯保证「点两下」先试杂字吃「两」再捕获「下」失败、回退后撞 (?!下) 拒。
-    // v0.57.14 修正（用户实锤回归：「点击十八」→编号 8）：杂音位必须**排除数字字**——
-    // 0.57.13 的 .{0,1} 把「十」当杂音吃掉，「点击十八/十九/十四…」全只剩个位；改为
-    // 非数字非「下」类，十八恢复 18，点辑四/点直是（→十）不受影响
-    private val TAP_LABEL_REGEX = Regex("""(?:点击|点|第)\s*[^0-9零一二两三四五六七八九十百下\s]{0,1}\s*([0-9零一二两三四五六七八九十百]+)\s*(?:个)?(?!下)""")
-
-    /** 网格点击匹配：网格 5 / 格子 5 / 第 5 格（与元素编号「第 5 个」区分） */
-    private val GRID_TAP_REGEX = Regex("""(?:网格|格子)\s*([0-9零一二两三四五六七八九十百]+)|第\s*([0-9零一二两三四五六七八九十百]+)\s*格""")
-
-    /** 网格一步式点击：点击 5 / 点击第 5 格 / 点第 5 格 → 直接点第 5 格（任意层级；排除「点一下」长按误触）。
-     *  v0.25.5 放宽：旧正则要求数字紧跟「点击」，「点击第5格」会掉进缩放通道（用户只能在第二层点击）。
-     *  现在第/格均可选——点击永远是点击，缩放只归「缩放到第N格 / 第N格 / 纯数字」管 */
-    private val GRID_TAP_CELL_REGEX = Regex("""(?:点击|点)\s*第?\s*([0-9零一二两三四五六七八九十百]+)\s*格?(?!下)""")
-
-    /** 网格显示时的宽容匹配：提取任意数字（"第5个"/"5"/"第五"都算），降低"格"字误识别影响 */
-    private val LOOSE_GRID_REGEX = Regex("""([0-9]+|[零一二两三四五六七八九十百]+)""")
-
-    /** 网格撤销命令词（均不含数字，从根源避免被数字匹配误吞） */
-    private val GRID_BACK_KEYWORDS = listOf("退回", "回退", "取消缩放")
-
-    /** 识别「点击 N」网格一步式点击（网格显示时）；不是点击命令返回 null */
-    private fun extractGridTapCell(text: String): Int? {
-        val m = lastMatch(GRID_TAP_CELL_REGEX, normalizeDigitHomophones(text)) ?: return null
-        return parseChineseNumber(m.groupValues[1])
-    }
-
-    /** 网格长按匹配（v0.57.19）：长按 N / 长按第 N 格 / 按住第 N 格——网格显示时归格子长按 */
-    private val GRID_LONG_PRESS_REGEX = Regex("""(?:长按|按住)\s*第?\s*([0-9零一二两三四五六七八九十百]+)\s*格?""")
-    private fun extractGridLongPressNumber(text: String): Int? {
-        val m = lastMatch(GRID_LONG_PRESS_REGEX, normalizeDigitHomophones(text)) ?: return null
-        return parseChineseNumber(m.groupValues[1])
-    }
-
-    /** 识别网格缩放数字；loose=true 时宽容提取任意数字（网格显示中） */
-    private fun extractGridNumber(text: String, loose: Boolean): Int? {
-        // 撤销类命令（不含数字）优先走命令匹配，双保险排除
-        if (GRID_BACK_KEYWORDS.any { text.contains(it) }) return null
-        val norm = normalizeDigitHomophones(text)
-        val m = lastMatch(GRID_TAP_REGEX, norm)
-        if (m != null) {
-            val numStr = m.groupValues[1].ifBlank { m.groupValues[2] }
-            return parseChineseNumber(numStr)
-        }
-        if (!loose) return null
-        val lm = lastMatch(LOOSE_GRID_REGEX, norm) ?: return null
-        return parseChineseNumber(lm.groupValues[1])
-    }
-
-    /** 识别「点击 N / 点第 N 个 / 第 N 个」并返回数字；否则 null */
-    private fun extractTapNumber(text: String): Int? {
-        val m = lastMatch(TAP_LABEL_REGEX, normalizeDigitHomophones(text)) ?: return null
-        return parseChineseNumber(m.groupValues[1])
-    }
-
-    /**
-     * 取「最后一个」正则匹配（而不是第一个）。
-     *
-     * 为什么：说话音量偏低时 VAD 会把多条命令合并成一段——实测「点击二十五点击十八」。
-     * 取第一个会去执行 25（用户早就不想点的旧编号），而用户真正想要的是最后说的 18。
-     * 第一性原理：一句话里出现多条同类命令时，最近说出的才是当前意图。
-     */
-    private fun lastMatch(regex: Regex, text: String): MatchResult? =
-        regex.findAll(text).lastOrNull()
-
-    /** 纯数字快捷匹配：整句就是一个数字（编号显示时直接报数字点编号，省掉「点击」前缀） */
-    private val BARE_NUMBER_REGEX = Regex("""^[0-9零一二两三四五六七八九十百]+$""")
-    private fun extractBareNumber(text: String): Int? {
-        val t = normalizeDigitHomophones(text.trim())
-        if (!BARE_NUMBER_REGEX.matches(t)) return null
-        return parseChineseNumber(t)
-    }
-
-    /**
-     * 编号模式下的宽松数字提取：整句只由「数字音节的常见同音字」组成（如「四是」=四十）。
-     * 只在编号显示时兜底使用——此时用户几乎必然在报数字，误判成本远低于掉进文字点击通道。
-     */
-    private val LOOSE_DIGIT_SYLLABLES = setOf(
-        '零', '一', '衣', '依', '医', '已', '以', '椅', '意', '易', '移', '疑',
-        '二', '两', '尔', '而', '耳', '儿', '饵',
-        '三', '伞', '散', '山', '叁',
-        '四', '是', '似', '寺', '事', '斯', '思', '撕', '死', '司', '丝', '私', '饲',
-        '五', '午', '舞', '无', '伍', '吴', '乌', '误', '悟', '雾', '物', '勿',
-        '六', '陆', '路', '留', '流', '刘', '榴', '溜',
-        '七', '期', '妻', '气', '柒', '齐', '其', '奇', '骑', '棋', '旗', '起', '汽', '器',
-        '八', '吧', '把', '爸', '扒', '疤', '拔', '靶', '坝', '罢', '捌',
-        '九', '久', '酒', '就', '玖', '旧', '救', '揪', '究', '舅', '韭',
-        '十', '时', '石', '拾', '实', '识', '食', '师', '狮', '失', '施', '什',
-        '式', '试', '势', '市', '世', '室', '视', '适', '饰', '释',
-        '百', '白', '摆', '拜', '点', '栋', '动'
-    )
-    private fun extractBareNumberLoose(text: String): Int? {
-        val t = text.trim()
-        if (t.length !in 1..3) return null
-        if (t.any { it !in LOOSE_DIGIT_SYLLABLES }) return null
-        return parseChineseNumber(normalizeDigitHomophones(t))
-    }
-
-    /** 长按编号匹配：长按 5 / 长按 12 / 长按第 5 个（(?!下) 排除「长按一下」这类无参长按） */
-    private val LONG_PRESS_LABEL_REGEX = Regex("""(?:长按|按住)\s*(?:第)?\s*([0-9零一二两三四五六七八九十百]+)\s*(?:个)?(?!下)""")
-
-    /** 长按文字匹配：长按抖音 / 按住抖音 → 提取目标文字 */
-    private val LONG_PRESS_TEXT_REGEX = Regex("""^(?:长按|按住)\s*(.+)$""")
-
-    /** 识别「长按 N」并返回编号；不是长按编号命令返回 null */
-    private fun extractLongPressNumber(text: String): Int? {
-        val m = lastMatch(LONG_PRESS_LABEL_REGEX, normalizeDigitHomophones(text)) ?: return null
-        return parseChineseNumber(m.groupValues[1])
-    }
-
-    /** 识别「长按 X」并返回目标文字；不是长按文字命令返回 null */
-    private fun extractLongPressText(text: String): String? {
-        val m = LONG_PRESS_TEXT_REGEX.find(text) ?: return null
-        val t = m.groupValues[1].trim()
-        return t.ifEmpty { null }
-    }
-
-    /** 文字点击匹配：打开 X / 点 X / 点击 X / 进入 X → 提取目标文字 X；否则短词(2~8字)直接当屏幕文字 */
-    private val TEXT_TAP_REGEX = Regex("""^(?:打开|点|点击|按|进入|启动)\s*(.+)$""")
-    private fun extractTextToTap(text: String): String? {
-        val trimmed = text.trim()
-        val m = TEXT_TAP_REGEX.find(trimmed)
-        if (m != null) {
-            val t = m.groupValues[1].trim()
-            return t.ifEmpty { null }
-        }
-        return if (trimmed.length in 2..8) trimmed else null
-    }
+    // ---------- 参数化提取已全部收敛到 CommandRouting（2026-09-28 迁出，2026-09-29 全指令 ----------
+    // 收敛轮起 handleRecognized 主链直接调用 planCommand——此前的同名薄委托已无调用者，
+    // 予以删除；正则本体与历史教训注释（点辑四杂音容忍、十八截成8、农夫三字形、四是宽松
+    // 数字等）都在 CommandRouting.kt。离线回归语料与产品路由走同一实现，不抄第二套。
 
     /** 进入长按待命模式：顶部横条提示，等待报数字或「中间」 */
     private fun enterLongPressMode() {
@@ -1354,57 +1851,208 @@ class VoiceService : Service() {
     }
 
     /** 长按待命模式下处理下一句：数字→长按编号；中间→长按屏幕；退出→取消 */
+    /** 长按待命模式下处理下一句：意图分类已提取到 CommandRouting.planLongPressStandby
+     *  （2026-09-29 收尾项3，纯函数可 JVM 离线回归）；此处只保留执行。 */
     private fun handleLongPressMode(text: String) {
-        // 「退出/取消」→ 退出长按模式（不结束整个会话）
-        if (text.contains("退出") || text.contains("取消")) {
-            exitLongPressMode()
-            VoiceControlService.updateBar("已退出长按模式")
-            SessionState.lastMatch = "→ 退出长按模式"
-            return
-        }
-        // v0.56.27：待命中说文字编辑命令（删除/清空/光标移动等）→ 退出待命并直接执行。
-        // 治「删除被听成长按误入待命后，再说删除没反应」的连环坑
-        val edit = text.trim().trim('，', '。', '！', '？', '…', ',', '.', '!', '?').trim()
-        if (edit in TEXT_EDIT_WORDS) {
-            exitLongPressMode()
-            VoiceControlService.updateBar("✂️ 取消长按，执行：$edit")
-            SessionState.lastMatch = "→ 取消长按，执行编辑：$edit"
-            currentMatcher().matchStrict(edit)?.let { dispatchMatched(it) }
-            return
-        }
-        // 「中间/屏幕」→ 长按屏幕正中间
-        if (text.contains("中间") || text.contains("屏幕")) {
-            val ok = VoiceControlService.longPressCenter()
-            VoiceControlService.updateBar(if (ok) "⚡ 长按屏幕中间" else "🎤 识别：$text")
-            SessionState.lastMatch = if (ok) "→ 长按屏幕中间 ✅" else "→ 长按中间"
-            exitLongPressMode()
-            return
-        }
-        // 数字 → 网格显示时长按对应格子（v0.57.20 用户实锤：网格定位说「长按」进待命、
-        // 再报数字被当「长按编号 N」处理）；否则长按对应编号
-        val num = extractBareNumber(text)
-        if (num != null) {
-            if (VoiceControlService.isGridShowing()) {
-                val ok = VoiceControlService.longPressGridCell(num)
-                VoiceControlService.updateBar(if (ok) "⚡ 长按第 $num 格" else "🎤 识别：$text")
-                SessionState.lastMatch = if (ok) "→ 长按第 $num 格 ✅" else "→ 长按第 $num 格"
+        when (val plan = CommandRouting.planLongPressStandby(text, VoiceControlService.isGridShowing())) {
+            is CommandRouting.StandbyDecision.CancelStandby -> {
                 exitLongPressMode()
-                return
+                VoiceControlService.updateBar("已退出长按模式")
+                SessionState.lastMatch = "→ 退出长按模式"
             }
-            val ok = VoiceControlService.longPressLabel(num)
-            VoiceControlService.updateBar(if (ok) "⚡ 长按编号 $num" else "🎤 识别：$text")
-            SessionState.lastMatch = if (ok) "→ 长按编号 $num ✅" else "→ 长按编号 $num"
-            exitLongPressMode()
-            return
+            is CommandRouting.StandbyDecision.EditCommand -> {
+                exitLongPressMode()
+                VoiceControlService.updateBar("✂️ 取消长按，执行：${plan.word}")
+                SessionState.lastMatch = "→ 取消长按，执行编辑：${plan.word}"
+                currentMatcher().matchStrict(plan.word)?.let { dispatchMatched(it) }
+            }
+            is CommandRouting.StandbyDecision.PressCenter -> {
+                val ok = VoiceControlService.longPressCenter()
+                if (ok) {
+                    noteUserActionDispatched()
+                    // 2026-09-30：成功登记长按点位（重复回放屏幕中心同一点）
+                    VoiceControlService.lastLongPressPoint?.let { p ->
+                        lastAction = LastAction.LongPressPoint(p.first, p.second)
+                    }
+                }
+                VoiceControlService.updateBar(if (ok) "⚡ 长按屏幕中间" else "🎤 识别：$text")
+                SessionState.lastMatch = if (ok) "→ 长按屏幕中间 ✅" else "→ 长按中间"
+                exitLongPressMode()
+            }
+            is CommandRouting.StandbyDecision.StandbyNumber -> {
+                // 网格显示时长按格子（v0.57.20：网格定位说「长按」进待命、报数字归格子），否则长按编号
+                val ok = if (plan.gridCell) VoiceControlService.longPressGridCell(plan.number)
+                else VoiceControlService.longPressLabel(plan.number)
+                if (ok) {
+                    noteUserActionDispatched()
+                    // 2026-09-30：成功登记点位（格子=lastGridTapPoint / 编号=lastLongPressPoint），
+                    // 重复回放同一点位——此前待命内长按成功不登记，重复会误放更早的动作
+                    if (plan.gridCell) {
+                        VoiceControlService.lastGridTapPoint?.let { p ->
+                            lastAction = LastAction.LongPressPoint(p.first, p.second)
+                        }
+                    } else {
+                        VoiceControlService.lastLongPressPoint?.let { p ->
+                            lastAction = LastAction.LongPressPoint(p.first, p.second)
+                        }
+                    }
+                }
+                val what = if (plan.gridCell) "第 ${plan.number} 格" else "编号 ${plan.number}"
+                VoiceControlService.updateBar(if (ok) "⚡ 长按$what" else "🎤 识别：$text")
+                SessionState.lastMatch = if (ok) "→ 长按$what ✅" else "→ 长按$what"
+                exitLongPressMode()
+            }
+            is CommandRouting.StandbyDecision.KeepWaiting -> {
+                // 其他：保持长按模式，重新计时
+                handler.removeCallbacks(longPressModeRunnable)
+                handler.postDelayed(longPressModeRunnable, LONG_PRESS_MODE_TIMEOUT_MS)
+                VoiceControlService.updateBar("🎤 长按模式：说数字，或「中间」")
+            }
         }
-        // 其他：保持长按模式，重新计时
-        handler.removeCallbacks(longPressModeRunnable)
-        handler.postDelayed(longPressModeRunnable, LONG_PRESS_MODE_TIMEOUT_MS)
-        VoiceControlService.updateBar("🎤 长按模式：说数字，或「中间」")
+    }
+
+    // 仅在本句主线程派发期间有效，绝不复用上一句的音频判决。
+    private var currentAudioDecision: AudioDecisionOutcome? = null
+    private var currentSpeechAudit: SpeechAudit.Recorder? = null
+    private val speechAssetFingerprint: String? by lazy {
+        runCatching { assets.open("audio_decision_assets.sha256").use { SpeechAudit.digest(it.readBytes()) } }.getOrNull()
+    }
+    private fun speechAuditMode(): String = when {
+        captureArmed -> "capture"
+        longPressMode -> "long_press_standby"
+        dictationMode -> "dictation"
+        else -> "ordinary"
+    }
+    private var currentNumberRequest: NumberReviewContext.Request? = null
+    private val numberTapDispatcher = NumberTapDispatcher()
+    private val numberSuffixRecovery = NumberSuffixRecovery(numberTapDispatcher)
+    private val m6Recovery = SilentCommandRecovery()
+    private val numberSilentRecovery = NumberSilentRecovery()
+    private var currentDecisionDisposition: String? = null
+    // M5：用户可读的处置短标签（已复核一致/已纠正/暂时不可用…），与专业详情（disposition）分层
+    private var currentDecisionLabel: String? = null
+
+    /** 模糊兜底统一入口（2026-09-29 收尾项2）：同分、不同动作=明确歧义 → 留痕并返回 null，
+     *  不再按词表顺序替用户猜动作（旧实现取 JSON 先出现者）；同分自定义绑定优先由
+     *  matchFuzzyDetailed 内部保证（v0.39.0 既有规则） */
+    private fun matchFuzzySafely(text: String): CommandMatcher.Match? =
+        matchFuzzyOutcomeSafely(text).let { if (it.ambiguous) null else it.match }
+
+    private fun matchFuzzyOutcomeSafely(text: String): CommandMatcher.StrictOutcome {
+        val outcome = currentMatcher().matchFuzzyDetailed(text)
+        if (outcome.ambiguous) {
+            Log.i(TAG, "模糊同分歧义，忽略: [$text] 冲突词=${outcome.tiedWords}")
+            DiagnosticsHelper.log("模糊同分歧义已忽略: $text（${outcome.tiedWords.joinToString("/")}）")
+            persistMiss(text)
+            return outcome
+        }
+        return outcome
+    }
+
+    /** 两条旧链静默出口在此会合；不抢已有动作，不替失败手势补发另一动作。 */
+    private fun tryM6Recovery(plan: CommandRouting.Decision, text: String, uid: String,
+                              tapStatus: SilentCommandRecovery.TextTapStatus,
+                              fuzzy: CommandMatcher.StrictOutcome): Boolean {
+        val result = m6Recovery.attempt(plan, text, tapStatus, fuzzy,
+            SilentCommandRecovery.Context(
+                enabled = m6ShadowEnabled && AudioDecision.isEnabled(this),
+                active = recording && !stopRequested,
+                normalMode = !dictationMode && !captureArmed && !longPressMode,
+                uid = uid, latestUid = "$sessionTag-u$utteranceSeq",
+                focusedEditable = CursorReviewPolicy.ENABLED && VoiceControlService.hasFocusedEditableForCursor(),
+                cursorEnabled = CursorReviewPolicy.ENABLED),
+            currentAudioDecision?.m6Top,currentAudioDecision?.cursorTop) { action ->
+                dispatchCommand(action,focusedCursorOnly = action in CursorReviewPolicy.ACTIONS)
+            } ?: return false
+        val note = VoiceControlService.consumeActionNote()
+        val actionName = when (result.action) {
+            "text_cursor_left" -> "光标左移"
+            "text_cursor_right" -> "光标右移"
+            else -> "打开最近任务"
+        }
+        currentDecisionLabel = if (result.dispatched) "声音复核救回" else "声音复核未执行"
+        currentDecisionDisposition = "M6救回：旧链无候选 → ${result.action}；派发=${result.dispatched}"
+        SessionState.lastMatch = note ?: if (result.dispatched)
+            "→ $actionName ✅ 已派发（声音复核）" else "→ ${actionName}未派发（声音复核）"
+        VoiceControlService.updateBar(note ?: if (result.dispatched)
+            "⚡ $actionName（声音复核）" else "⚠️ ${actionName}未派发")
+        DiagnosticsHelper.log("M6救回[$uid]: [$text] ${result.action} dispatched=${result.dispatched}")
+        if (result.dispatched) vibrateFeedback()
+        handler.removeCallbacks(barResetRunnable)
+        handler.postDelayed(barResetRunnable, 1500L)
+        return true
+    }
+
+    /** 完整“数字+号”语义恢复：文字不存在才参与，不新增编码或IPC请求。 */
+    private fun tryNumberSuffixRecovery(plan: CommandRouting.Decision, text: String, uid: String,
+                                        tapStatus: SilentCommandRecovery.TextTapStatus,
+                                        fuzzy: CommandMatcher.StrictOutcome): Boolean {
+        val live = NumberReviewContext.Live("$sessionTag-u$utteranceSeq", sessionGeneration,
+            // “数字+号”是既有文字语义恢复，与已移除的声音二审解耦。
+            true, recording && !stopRequested,
+            !dictationMode && !captureArmed && !longPressMode, VoiceControlService.numberReviewSnapshot())
+        val restored = numberSuffixRecovery.attempt(plan, text, tapStatus, fuzzy, currentMatcher(),
+            VoiceControlService.isLabelsVisible(), VoiceControlService.isGridShowing(), currentNumberRequest, live,
+            currentAudioDecision?.numTop, currentAudioDecision?.numPairTop,
+            confirmation = currentAudioDecision?.numSegmentTop, tap = VoiceControlService::tapLabel) ?: return false
+        val result = restored.dispatch
+        if (!result.attempted) {
+            currentSpeechAudit?.rejected(result.rejection ?: "suffix_already_handled")
+            return true // 同句已消费，不重复反馈，也不落回模糊派发。
+        }
+        currentSpeechAudit?.dispatched(SpeechAudit.Route("tap_number", result.number), result.dispatched, result.rejection)
+        val number = result.number
+        val correction = result.correction
+        val note = "（编号语义恢复）" + if (correction != null)
+            "（声音复核：${correction.fromNumber}→${correction.toNumber}）" else ""
+        if (result.dispatched) {
+            noteUserActionDispatched()
+            lastAction = LastAction.TapLabel(number)
+            vibrateFeedback()
+        }
+        currentDecisionLabel = if (correction != null) "已纠正" else "未参与"
+        currentDecisionDisposition = "编号语义恢复：${restored.textNumber}→$number；" +
+            "替换显示编号模糊命中=${restored.replacedShowLabels}；声音改号=${correction != null}；派发=${result.dispatched}"
+        SessionState.lastMatch = if (result.dispatched) "→ 点击编号 $number ✅ 已派发$note"
+            else "→ 编号 $number 未派发$note"
+        VoiceControlService.updateBar(if (result.dispatched) "⚡ 点击编号 $number$note" else "⚠️ 编号 $number 未派发$note")
+        DiagnosticsHelper.log("编号语义恢复[$uid]: [$text] ${restored.textNumber}→$number " +
+            "replacedShowLabels=${restored.replacedShowLabels} soundCorrection=${correction != null} dispatched=${result.dispatched}")
+        handler.removeCallbacks(barResetRunnable)
+        handler.postDelayed(barResetRunnable, 1500L)
+        return true
+    }
+
+    /** 数字静默出口：原数字/文字/模糊/已有声音链全部没动作后才参与。 */
+    private fun tryNumberRecovery(plan: CommandRouting.Decision, text: String, uid: String,
+                                  tapStatus: SilentCommandRecovery.TextTapStatus,
+                                  fuzzy: CommandMatcher.StrictOutcome): Boolean {
+        val live = NumberReviewContext.Live("$sessionTag-u$utteranceSeq",sessionGeneration,
+            m6ShadowEnabled && AudioDecision.isEnabled(this),recording && !stopRequested,
+            !dictationMode && !captureArmed && !longPressMode,VoiceControlService.numberReviewSnapshot())
+        val result = numberSilentRecovery.attempt(plan,text,tapStatus,fuzzy,currentNumberRequest,live,
+            currentAudioDecision?.numSegmentTop,VoiceControlService::tapLabel) ?: return false
+        currentSpeechAudit?.dispatched(SpeechAudit.Route("tap_number", result.number), result.dispatched)
+        if (result.dispatched) {
+            noteUserActionDispatched()
+            lastAction = LastAction.TapLabel(result.number)
+        }
+        currentDecisionLabel = if (result.dispatched) "声音复核救回" else "声音复核未执行"
+        currentDecisionDisposition = "数字救回：完整旧链静默 → ${result.number}；派发=${result.dispatched}"
+        SessionState.lastMatch = if (result.dispatched) "→ 点击编号 ${result.number} ✅ 已派发（声音复核）"
+            else "→ 编号 ${result.number} 未派发（声音复核）"
+        VoiceControlService.updateBar(if (result.dispatched) "⚡ 点击编号 ${result.number}（声音复核）"
+            else "⚠️ 编号 ${result.number} 未派发")
+        DiagnosticsHelper.log("数字救回[$uid]: [$text] target=${result.number} dispatched=${result.dispatched}")
+        if (result.dispatched) vibrateFeedback()
+        handler.removeCallbacks(barResetRunnable)
+        handler.postDelayed(barResetRunnable,1500L)
+        return true
     }
 
     /** 执行匹配到的命令；含「退出」安全红线。 */
     private fun dispatchMatched(matched: CommandMatcher.Match) {
+        currentSpeechAudit?.matched(matched, currentMatcher().isCustomMatch(matched))
         // 2026-09-14 用户日志实锤：闲话「走出」被 pinyin_fuzzy 掰成「退出」→ 会话无辜断开
         // （"用一半自动退出聆听"）。会话终结类命令（退出/锁屏）不接受模糊命中——
         // 同音字仍可退（pinyin_exact），只有"差一个音"这种最易误触的档位对危险命令闭嘴
@@ -1441,6 +2089,7 @@ class VoiceService : Service() {
                 return
             }
             Log.i(TAG, "FUZZY_GUARD 拒绝模糊命中危险命令：[${SessionState.lastText}] -> ${matched.matchedWord}")
+            currentSpeechAudit?.rejected("dangerous_fuzzy_match")
             DiagnosticsHelper.log("模糊命中危险命令已忽略：${SessionState.lastText} ≈ ${matched.matchedWord}")
             if (fuzzyExitRejects.size == 2) {
                 // 第二次给出明确指引：被识别困住的用户需要知道出口
@@ -1463,7 +2112,11 @@ class VoiceService : Service() {
         if (matched.action.startsWith("tap_number_")) {
             val n = matched.action.removePrefix("tap_number_").toIntOrNull() ?: return
             val ok = VoiceControlService.tapLabel(n)
-            if (ok) lastAction = LastAction.TapLabel(n)
+            currentSpeechAudit?.dispatched(SpeechAudit.Route("tap_number", n), ok)
+            if (ok) {
+                noteUserActionDispatched()
+                lastAction = LastAction.TapLabel(n)
+            }
             VoiceControlService.updateBar(if (ok) "⚡ 点击编号 $n" else "🎤 识别：${SessionState.lastText}")
             SessionState.lastMatch = if (ok) "→ 点击编号 $n ✅ 已执行" else "→ 点击编号 $n"
             if (ok) vibrateFeedback()
@@ -1479,6 +2132,7 @@ class VoiceService : Service() {
             }
             val ok = VoiceControlService.tapGridCell(n)
             if (ok) {
+                noteUserActionDispatched()
                 VoiceControlService.lastGridTapPoint?.let { p ->
                     lastAction = LastAction.TapPoint(p.first, p.second)
                 }
@@ -1486,6 +2140,27 @@ class VoiceService : Service() {
             VoiceControlService.updateBar(if (ok) "⚡ 点击第 $n 格" else "🎤 识别：${SessionState.lastText}")
             SessionState.lastMatch = if (ok) "→ 点击第 $n 格 ✅" else "→ 点击第 $n 格"
             if (ok) vibrateFeedback()
+            return
+        }
+        // 2026-10-02：真实“增加音量”被dec@0.937反向派发，完整文字及用户绑定不再被二类高分覆盖。
+        // 残缺/同音候选仍可按声音改判；共用派发口保证本句只执行一个方向，不自动补发。
+        if (matched.action == "volume_up" || matched.action == "volume_down") {
+            val enhancedEnabled = AudioDecision.isEnabled(this)
+            val dispatch = AudioDecisionRouting.dispatchVolume(SessionState.lastText, matched,
+                enhancedEnabled, currentAudioDecision, currentMatcher().isCustomMatch(matched)
+            ) { action -> dispatchCommand(action) }
+            val resolution = dispatch.resolution
+            currentDecisionDisposition = resolution.description
+            currentDecisionLabel = resolution.label
+            if (resolution.overrideBlocked || resolution.action != matched.action) {
+                Log.i(TAG, "AUDIO_DECISION 音量处置：${resolution.description}（原文=${SessionState.lastText}）")
+                DiagnosticsHelper.log("音量处置: ${SessionState.lastText} ${resolution.description}")
+            }
+            val note = VoiceControlService.consumeActionNote()
+            val resultText = AudioDecisionRouting.volumeResultText(dispatch, note)
+            VoiceControlService.updateBar(AudioDecisionRouting.volumeBarText(dispatch, note))
+            SessionState.lastMatch = resultText
+            if (dispatch.dispatched) vibrateFeedback()
             return
         }
         // 音量/摇移命令：执行器可能带回附加提示（如「已达安全上限」「桌面不支持摇移」），
@@ -1502,7 +2177,24 @@ class VoiceService : Service() {
             }
             return
         }
-        val ok = dispatchCommand(matched.action)
+        // 标准导航的否定/问句守卫放在统一派发口，严格与模糊入口均不能绕过。
+        // 拒绝后本句已处理，不再补猜、不派发、不取消正在执行的旧任务。
+        val navigationOutcome = NavigationIntentGuard.dispatch(
+            // 保留既有文字否定/询问保护，不依赖声音二审开关。
+            SessionState.lastText, matched, true,
+            !dictationMode && !captureArmed && !longPressMode, currentMatcher().isCustomMatch(matched)
+        ) { dispatchCommand(matched.action) }
+        if (navigationOutcome.rejection != null) {
+            val reason = navigationOutcome.rejection.description
+            currentSpeechAudit?.rejected("navigation_${navigationOutcome.rejection.name.lowercase(java.util.Locale.US)}")
+            DiagnosticsHelper.log("导航意图保护：[${currentNumberRequest?.uid.orEmpty()}] [${SessionState.lastText}] -> ${matched.action}，$reason")
+            VoiceControlService.updateBar("🎤 $reason，未执行导航")
+            SessionState.lastMatch = "→ 未执行导航（$reason）"
+            handler.removeCallbacks(barResetRunnable)
+            handler.postDelayed(barResetRunnable, 1500L)
+            return
+        }
+        val ok = navigationOutcome.dispatched
         VoiceControlService.updateBar(if (ok) "⚡ 执行：${matched.matchedWord}" else "🎤 识别：${SessionState.lastText}")
         SessionState.lastMatch = if (ok) "→ ${matched.matchedWord} ✅ 已执行" else "→ ${matched.matchedWord}"
         if (ok) vibrateFeedback()
@@ -1526,44 +2218,19 @@ class VoiceService : Service() {
     private fun normalizeDigitHomophones(s: String): String = DigitParser.normalizeDigitHomophones(s)
     private fun parseChineseNumber(s: String): Int? = DigitParser.parseChineseNumber(s)
 
-    /** 重复命令匹配：重复 / 重复 N 次 / 再来一次。
-     *  「农夫」家族（2026-09-22 用户使用记录实锤）：ASR 常把「重复」(chong fu) 听成
-     *  nong fu 音节的三种字形——农夫/农富/农复（「农夫农夫两次」「农富农富五次」均有样本），
-     *  开头即变体时旧正则全漏；三字形并列后次数正确解析，反馈仍显示「重复 N 次」不露怪词 */
-    private val REPEAT_REGEX = Regex("""(?:重复|再来|农夫|农富|农复)\s*([0-9零一二两三四五六七八九十百]+)?\s*(?:次|遍)?""")
+    // 重复/替换匹配已迁至 CommandRouting（REPEAT_REGEX 的农夫三字形、loose 兜底窄口径
+    // 等历史注释随实现迁移）；本类经上方薄委托调用
 
-    /** 替换命令匹配（v0.41.0）：把X替换成Y / 把X换成Y / 把X改成Y（X、Y 各 1~10 字，非贪婪） */
-    private val REPLACE_REGEX = Regex("""^把(.{1,10}?)(?:替换成|换成|改成)(.{1,10})$""")
-
-    /** 识别「重复 / 重复 N 次」并返回次数（默认 1）；不是重复命令返回 null */
-    private fun extractRepeatCount(text: String): Int? {
-        val m = lastMatch(REPEAT_REGEX, normalizeDigitHomophones(text)) ?: return null
-        val numStr = m.groupValues[1]
-        if (numStr.isBlank()) return 1
-        return parseChineseNumber(numStr)
-    }
-
-    /**
-     * 宽松重复兜底：ASR 常把「重复一次」听成「过一次/不一次/试一次」（音节丢失或替代），
-     * 吞开头字后形态更杂（「负三次」「两次」「不两次」，2026-09-22 实测）。
-     * 口径收得极窄防误触——需同时满足：短句(2~4字)、以 次/遍/是 结尾、不含任何动作动词、
-     * 编号/网格未显示（那些模式下短句是数字意图）、且确有可重复动作。
-     * 次数（v0.57.8）：句中提数字（「负三次」→3、「不两次」→2），提不到默认 1（旧行为）。
-     */
-    private fun extractLooseRepeat(text: String): Int? {
-        if (lastAction == null) return null
-        if (VoiceControlService.isLabelsVisible() || VoiceControlService.isGridShowing()) return null
-        val t = text.trim()
-        if (t.length !in 2..4) return null
-        if (!(t.endsWith("次") || t.endsWith("遍") || t.endsWith("是"))) return null
-        val actionVerbs = listOf("点", "按", "滑", "摇", "打", "退", "长", "显", "网格", "编号", "音量", "锁", "通知", "控制", "继续")
-        if (actionVerbs.any { t.contains(it) }) return null
-        return DigitParser.looseRepeatCount(t)
-    }
-
-    /** 处理「重复 N 次」：校验上限、回放上一次动作 */
-    private fun handleRepeat(times: Int) {
+    /** 处理「重复 N 次」：校验上限、回放上一次动作。uid=发起句身份（2026-09-30）：
+     *  异步结果（完成/停止/替换/中止）按它写回**原句**的使用记录条目，不串到后来的句子。 */
+    private fun handleRepeat(times: Int, utteranceId: String = "") {
         when {
+            // 2026-09-30 边界修复：「重复0次」当场拒绝——0 次若启动任务会立即耗尽 remaining
+            // 且无任何结果事件，记录永久停在「已开始」
+            times <= 0 -> {
+                VoiceControlService.updateBar("⚠️ 重复次数需至少 1 次")
+                SessionState.lastMatch = CommandRouting.RepeatOutcomeText.rejectedZero()
+            }
             times > MAX_REPEAT -> {
                 VoiceControlService.updateBar("⚠️ 重复最多 $MAX_REPEAT 次")
                 SessionState.lastMatch = "→ 重复次数超过上限（最多 $MAX_REPEAT 次）"
@@ -1572,41 +2239,99 @@ class VoiceService : Service() {
                 VoiceControlService.updateBar("🎤 还没有可重复的动作")
                 SessionState.lastMatch = "→ 还没有可重复的动作"
             }
+            repeatTask != null -> {
+                // 一次只保留一个重复任务；新请求替换尚未执行的次数，不叠加、不并行。
+                // 被替换的旧请求按其发起句 uid 如实写回（已派发 X/N），新请求独立记账
+                val old = repeatTask
+                if (old != null) {
+                    repeatRunnable?.let(handler::removeCallbacks)
+                    repeatTask = null
+                    repeatRunnable = null
+                    old.cancel(CommandRouting.RepeatTask.CancelReason.REPLACED_BY_REPEAT)
+                }
+                repeatLastAction(times, utteranceId)
+                VoiceControlService.updateBar("🔁 已替换剩余重复次数：$times 次")
+                SessionState.lastMatch = "→ 新请求替换上一轮未执行部分，重复 $times 次"
+            }
             else -> {
-                repeatLastAction(times)
+                repeatLastAction(times, utteranceId)
                 VoiceControlService.updateBar("⚡ 重复 $times 次")
-                SessionState.lastMatch = "→ 重复 $times 次 ✅"
+                // 2026-09-29 执行反馈分层：回放是异步链，派发瞬间没有「已全部执行」的证据——
+                // 不冒充 ✅；完成时按 uid 写回「已全部派发」（2026-09-30 口径），失败写回「已停止」
+                SessionState.lastMatch = CommandRouting.RepeatOutcomeText.started(times)
             }
         }
     }
 
-    /** 串行回放上一次动作 times 次（每次间隔，避免手势冲突；绕过熔断/冷却因为是明确指令） */
-    private fun repeatLastAction(times: Int) {
+    /** 一次「重复 N 次」的异步回放任务（状态机在 CommandRouting.RepeatTask，生产/测试同一实现）：
+     *  repeatRunnable=驱动它的队列句柄（取消时 removeCallbacks 用）。 */
+    private var repeatTask: CommandRouting.RepeatTask? = null
+    private var repeatRunnable: Runnable? = null
+
+    /** 用户派发了新的可执行动作（2026-09-30 收尾轮用户拍板策略）：取消旧重复任务的剩余
+     *  次数并按旧任务 uid 记「被新命令中止（已派发 X/N）」——重点防旧点击在新页面继续执行；
+     *  不自动补点/重试。「退出」仍立即结束（releaseAndStop 记「会话结束」）；新重复请求
+     *  替换旧请求走 REPLACED_BY_REPEAT 口径。 */
+    private fun noteUserActionDispatched() {
+        val task = repeatTask ?: return
+        repeatRunnable?.let(handler::removeCallbacks)
+        repeatTask = null
+        repeatRunnable = null
+        task.cancel(CommandRouting.RepeatTask.CancelReason.NEW_COMMAND)
+    }
+
+    /** 串行回放上一次动作 times 次（每次间隔，避免手势冲突；绕过熔断/冷却因为是明确指令）。
+     *  状态机=CommandRouting.RepeatTask（迟到横条抑制/计数/文案/终态在生产与测试同一实现）；
+     *  间隔按动作类型取安全串行值（长按 750ms，2026-09-30 冲突修复）。 */
+    private fun repeatLastAction(times: Int, utteranceId: String) {
         val la = lastAction ?: return
-        var remaining = times
+        val host = object : CommandRouting.RepeatTask.Host {
+            override fun dispatchRepeatAction(): Boolean = when (la) {
+                is LastAction.Command -> if (la.focusedCursorOnly)
+                    VoiceControlService.executeRecoveredCursor(la.action) else VoiceControlService.execute(la.action)
+                is LastAction.TapLabel -> VoiceControlService.tapLabel(la.number)
+                is LastAction.TapPoint -> {
+                    Log.i(TAG, "重复：原坐标再点 (${la.x.toInt()},${la.y.toInt()})")
+                    VoiceControlService.tapAtPoint(la.x, la.y)
+                }
+                is LastAction.LongPressPoint -> {
+                    Log.i(TAG, "重复：原坐标再长按 (${la.x.toInt()},${la.y.toInt()})")
+                    VoiceControlService.longPressAtPoint(la.x, la.y)
+                }
+            }
+            override fun recordOutcome(uid: String, text: String) { UsageLog.updateOutcome(uid, text) }
+            override fun showBar(text: String) { VoiceControlService.updateBar(text) }
+            override fun currentUtteranceSeq(): Int = utteranceSeq
+            override fun sessionActive(): Boolean = recording
+        }
+        // 2026-09-30 收尾漏洞②：startSeq 用**发起句**的序号（从 utteranceId 解析，格式
+        // "g{gen}-{rand}-u{seq}"）——不重新读全局 utteranceSeq（识别线程可能已因下一句
+        // 识别而递增；若误用已增长值，本句的迟到失败会顶掉下一句的胶囊）
+        val startSeq = utteranceId.substringAfterLast("-u").toIntOrNull() ?: utteranceSeq
+        val task = CommandRouting.RepeatTask(utteranceId, times, startSeq, host)
         val runnable = object : Runnable {
             override fun run() {
-                if (remaining <= 0 || !recording) {
-                    Log.i(TAG, "重复回放中止：剩余 $remaining，recording=$recording")
+                if (repeatTask !== task) return   // 已被新命令/新重复/会话结束取消：迟到回调拒绝执行
+                val again = task.step()
+                if (!again) {
+                    // 2026-09-30 收尾漏洞①：任务终结（完成/失败/会话中止）→ 清除句柄。
+                    // 状态机已进终态（后续 cancel 静默返回），此处再清句柄双保险——
+                    // 之后的新命令/新重复/退出不会看到旧任务，已定结果不被改写
+                    if (repeatTask === task) {
+                        repeatTask = null
+                        repeatRunnable = null
+                    }
                     return
                 }
-                Log.i(TAG, "重复回放：${la}（recording=$recording）")
-                when (la) {
-                    is LastAction.Command -> VoiceControlService.execute(la.action)
-                    is LastAction.TapLabel -> VoiceControlService.tapLabel(la.number)
-                    is LastAction.TapPoint -> {
-                        Log.i(TAG, "重复：原坐标再点 (${la.x.toInt()},${la.y.toInt()})")
-                        VoiceControlService.tapAtPoint(la.x, la.y)
-                    }
-                    is LastAction.LongPressPoint -> {
-                        Log.i(TAG, "重复：原坐标再长按 (${la.x.toInt()},${la.y.toInt()})")
-                        VoiceControlService.longPressAtPoint(la.x, la.y)
-                    }
-                }
-                remaining--
-                if (remaining > 0) handler.postDelayed(this, REPEAT_INTERVAL_MS)
+                // 长按手势时长 650ms > 默认间隔 620ms：长按类取安全串行间隔，防止
+                // 下一次派发打断未完成的长按（派发成功≠手势完成，750ms 只降风险不是完成证明）
+                val interval = CommandRouting.repeatIntervalMs(
+                    la is LastAction.LongPressPoint, REPEAT_INTERVAL_MS,
+                    VoiceControlService.LONG_PRESS_DURATION_MS)
+                handler.postDelayed(this, interval)
             }
         }
+        repeatTask = task
         repeatRunnable = runnable
         handler.post(runnable)
     }
@@ -1615,9 +2340,10 @@ class VoiceService : Service() {
      * 把动作派发到无障碍服务执行，带冷却与熔断保护。
      * @return 是否真正派发执行
      */
-    private fun dispatchCommand(action: String): Boolean {
+    private fun dispatchCommand(action: String, focusedCursorOnly: Boolean = false): Boolean {
         // 无障碍服务未开启 → 无法执行；横条同步告知原因（商用级：失效必须可感知，不能静默）
         if (!VoiceControlService.isReady()) {
+            currentSpeechAudit?.dispatched(SpeechAudit.Route(action), false, "accessibility_unavailable")
             Log.w(TAG, "无障碍服务未开启，无法执行：$action")
             SessionState.status = "无障碍服务被关闭，请回到应用重新开启"
             VoiceControlService.updateBar("⚠️ 无障碍已关闭，动作无法执行")
@@ -1629,6 +2355,7 @@ class VoiceService : Service() {
         // 冷却：同一命令冷却期内不重复执行（先判断；被冷却跳过的动作不计入熔断，避免正常快速操作被误判成循环）
         val last = lastExecTime[action] ?: 0L
         if (now - last < COOLDOWN_MS) {
+            currentSpeechAudit?.dispatched(SpeechAudit.Route(action), false, "cooldown")
             Log.i(TAG, "命令冷却中，跳过：$action")
             return false
         }
@@ -1639,13 +2366,16 @@ class VoiceService : Service() {
         }
         execHistory.addLast(now)
         if (execHistory.size >= CIRCUIT_MAX_EXEC) {
+            currentSpeechAudit?.dispatched(SpeechAudit.Route(action), false, "circuit_breaker")
             DiagnosticsHelper.log("熔断触发：${CIRCUIT_WINDOW_MS / 1000}s 内 ${execHistory.size} 次")
             releaseAndStop("连续误触发，熔断保护")
             return false
         }
         lastExecTime[action] = now
 
-        val ok = VoiceControlService.execute(action)
+        val ok = if (focusedCursorOnly) VoiceControlService.executeRecoveredCursor(action)
+            else VoiceControlService.execute(action)
+        currentSpeechAudit?.dispatched(SpeechAudit.Route(action), ok, if (ok) null else "executor_rejected")
         Log.i(TAG, "执行动作：$action -> $ok")
         if (ok && action != "exit_session") {
             // v0.39.1：全部派发动作可被「重复」回放（白名单已废止，防"新功能忘登记"复发）。
@@ -1658,9 +2388,12 @@ class VoiceService : Service() {
                     Log.i(TAG, "轻点命中网格格心，可重复动作记为点位 (${p.first.toInt()},${p.second.toInt()})")
                 } ?: run { lastAction = LastAction.Command(action) }
             } else {
-                lastAction = LastAction.Command(action)
+                lastAction = LastAction.Command(action,focusedCursorOnly)
                 Log.i(TAG, "可重复动作已记录：$action")
             }
+            // 2026-09-30 收尾轮用户拍板：用户派发了新的可执行命令 → 取消旧重复任务剩余次数
+            //（防旧点击在新页面继续执行；重复回放不经 dispatchCommand，不会自杀）
+            noteUserActionDispatched()
         }
         return ok
     }
@@ -1723,8 +2456,14 @@ class VoiceService : Service() {
         micReleaseReceipt()   // 释放回执：系统级确认无残留（用户恐惧点闭环，见函数注释）
         handler.removeCallbacks(watchdogRunnable)
         handler.removeCallbacks(warnRunnable)
-        repeatRunnable?.let { handler.removeCallbacks(it) }
-        repeatRunnable = null
+        // 会话结束取消未完的重复回放，并按发起句 uid 如实写回（已派发 X/N）——
+        // 退出/看门狗/锁屏/熔断全走本统一出口，写回按 uid 定位不串句
+        repeatTask?.let { task ->
+            repeatRunnable?.let(handler::removeCallbacks)
+            repeatTask = null
+            repeatRunnable = null
+            task.cancel(CommandRouting.RepeatTask.CancelReason.SESSION_END)
+        }
         longPressMode = false
         handler.removeCallbacks(longPressModeRunnable)
         dictationMode = false
@@ -1743,9 +2482,40 @@ class VoiceService : Service() {
         val t = recordThread
         recordThread = null
         thread(name = "voice-teardown") {
-            try { t?.join(3000) } catch (_: InterruptedException) {}
-            releaseVad()
-            releaseRecognizer()
+            // 同一把跨实例锁覆盖等待和释放：解码未退出时，新 Service 会在模型创建处等待。
+            synchronized(initLock) {
+                var interrupted = false
+                while (t?.isAlive == true) {
+                    try { t.join() } catch (_: InterruptedException) { interrupted = true }
+                }
+                if (interrupted) Thread.currentThread().interrupt()
+                releaseVad()
+                releaseRecognizer()
+            }
+            // 初始化线程的 finally 还会归还一个尚未提交的远程 session，等它把释放排队后再关 executor。
+            while (initInFlight) {
+                try { Thread.sleep(20L) } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    break
+                }
+            }
+            val decisionInit = decisionInitThread
+            if (decisionInit != null && decisionInit !== Thread.currentThread()) {
+                decisionInit.interrupt()
+                try {
+                    decisionInit.join(AUDIO_DECISION_INIT_TIMEOUT_MS + 2_000L)
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                }
+                if (decisionInit.isAlive) {
+                    Log.w(TAG, "AUDIO_DECISION 初始化线程未及时退出；会话 token 仍隔离，基础识别已释放")
+                }
+            }
+            val session = audioDecisionSession
+            audioDecisionSession = null
+            releaseRemoteDecision(session)
+            // 让队列中已排入的 SHUTDOWN 完成；不打断正在进行的 Binder 调用。
+            decisionExecutor.shutdown()
         }
     }
 

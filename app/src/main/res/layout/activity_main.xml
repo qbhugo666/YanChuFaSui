@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- 主页 v0.56.3：新拟物精修版
-     顶栏(logo+设置) + 英雄区双态(未启动=开始控制 / 会话中=四态状态卡)
+     顶栏(logo+设置) + 英雄区双态(未启动=开始控制 / 会话中=正在聆听)
      + 两张独立卡(指令/使用记录) + 底部关于
      卡片=NeuCardView 真模糊双阴影（阴影画在卡片自身空当内）；间距=表面间距，已含阴影呼吸位 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
@@ -99,7 +99,7 @@
                 android:textSize="14sp" />
         </com.voicecontrol.app.NeuCardView>
 
-        <!-- 态②：会话中（四态状态卡，子元素按 phase 切换） -->
+        <!-- 态②：会话中（固定聆听展示，单条命令反馈由胶囊和使用记录显示） -->
         <com.voicecontrol.app.NeuCardView
             android:id="@+id/hero_status"
             android:layout_width="match_parent"
@@ -116,43 +116,11 @@
             app:neuDarkColor="@color/neu_lo"
             app:neuSurfaceColor="@color/neu_bg">
 
-            <FrameLayout
+            <com.voicecontrol.app.LogoCircleView
+                android:id="@+id/iv_status_logo"
                 android:layout_width="88dp"
-                android:layout_height="88dp">
-
-                <com.voicecontrol.app.LogoCircleView
-                    android:id="@+id/iv_status_logo"
-                    android:layout_width="88dp"
-                    android:layout_height="88dp"
-                    android:layout_gravity="center"
-                    android:contentDescription="@null" />
-
-                <ProgressBar
-                    android:id="@+id/pb_exec"
-                    android:layout_width="96dp"
-                    android:layout_height="96dp"
-                    android:layout_gravity="center"
-                    android:indeterminate="true"
-                    android:visibility="gone" />
-
-                <ImageView
-                    android:id="@+id/iv_status_done"
-                    android:layout_width="72dp"
-                    android:layout_height="72dp"
-                    android:layout_gravity="center"
-                    android:contentDescription="@null"
-                    android:src="@drawable/ic_check_circle"
-                    android:visibility="gone" />
-
-                <ImageView
-                    android:id="@+id/iv_status_fail"
-                    android:layout_width="72dp"
-                    android:layout_height="72dp"
-                    android:layout_gravity="center"
-                    android:contentDescription="@null"
-                    android:src="@drawable/ic_error_circle"
-                    android:visibility="gone" />
-            </FrameLayout>
+                android:layout_height="88dp"
+                android:contentDescription="@null" />
 
             <TextView
                 android:id="@+id/tv_status_title"

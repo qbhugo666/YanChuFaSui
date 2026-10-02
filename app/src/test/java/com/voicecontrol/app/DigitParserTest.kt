@@ -77,6 +77,14 @@ class DigitParserTest {
         assertEquals(45, num("四十五"))
     }
 
+    @Test
+    fun parse_repeatedTwoDigitNumbersRemainValid() {
+        assertEquals(11, DigitParser.parseChineseNumber("11"))
+        assertEquals(22, DigitParser.parseChineseNumber("22"))
+        assertEquals(11, DigitParser.parseChineseNumber("一一"))
+        assertEquals(22, DigitParser.parseChineseNumber("二二"))
+    }
+
     /** 宽松重复次数提取（v0.57.8：重复命令被吞开头字，「负三次」「两次」「不两次」实锤；
      *  旧兜底把次数写死 1——用户点破「负三次难道不该执行重复三次吗」） */
     @Test

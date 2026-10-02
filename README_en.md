@@ -57,7 +57,7 @@ YanChuFaSui started from a plain question: **what if an Android phone could be c
 
 It does not redesign Android's interface, and it does not ask users to learn a new system. Built on the Android Accessibility framework, it turns spoken commands into real interactions on the current screen — the same UI, the same wording, the same actions.
 
-The project is driven by a genuine accessibility need: its first user is the developer himself, who lives with SMA.
+The project is driven by real accessibility needs and improved through feedback from everyday voice control.
 
 ## Core capabilities
 

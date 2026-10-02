@@ -40,6 +40,7 @@ fun pinyinOf(s: String): String {
  */
 class CommandMatcher private constructor(
     private val entries: List<Entry>,
+    private val customWords: Set<String> = emptySet(),
 ) {
     data class Entry(
         val id: String,
@@ -57,6 +58,18 @@ class CommandMatcher private constructor(
         val method: String,
     )
 
+    /**
+     * matchStrict 的明细结果（2026-09-28 M2 统一候选语义）：把「无候选」与「同分歧义」
+     * 从共用 null 里拆开——match==null 且 ambiguous=false 是没匹配到；ambiguous=true 是
+     * 同分、同长度却指向不同动作的明确冲突（如整句同时 contains「显示网格」与「隐藏网格」），
+     * 调用方不得再交给文字点击/拼音模糊重新猜（旧链路会兜成一个动作，等于替用户拍板）。
+     * 用户自定义绑定（customWords）不受歧义判定压制——同分自定义优先是既有显式规则（v0.39.0）。
+     */
+    data class StrictOutcome(val match: Match?, val ambiguous: Boolean, val tiedWords: List<String> = emptyList())
+
+    /** 自定义绑定可能复用标准命令的id/group，归属必须查实际绑定词集合。 */
+    internal fun isCustomMatch(match: Match): Boolean = match.matchedWord in customWords
+
     /** 整词精确命中（v0.57.12）：折叠后与命令词/别名**完全相等**才算（contains/拼音不算）。
      *  用途：在册命令优先级判定——听写触发容错不得劫持正式命令（用户点破「删除被听写抢走太蠢」）。
      *  例：「删除」exact 命中 text_delete → 永远按删除命令走；「输入」不是词表词 → 不拦听写 */
@@ -69,14 +82,24 @@ class CommandMatcher private constructor(
         return null
     }
 
-    /** 精确匹配：exact / contains / pinyin_exact（可靠，最优先）。匹配不到返回 null。 */
+    /** 精确匹配：exact / contains / pinyin_exact（可靠，最优先）。匹配不到返回 null。
+     *  同分歧义（详见 [matchStrictDetailed]）也返回 null——兼容旧调用方；需要区分
+     *  「无候选」与「歧义」的调用方（路由层）请用明细版。 */
     fun matchStrict(text: String): Match? {
+        val outcome = matchStrictDetailed(text)
+        return if (outcome.ambiguous) null else outcome.match
+    }
+
+    fun matchStrictDetailed(text: String): StrictOutcome {
         val t = collapseDoubled(text.trim())
-        if (t.isEmpty()) return null
+        if (t.isEmpty()) return StrictOutcome(null, false)
         val tp = pinyinOf(t)
 
         var best: Match? = null
         var bestScore = 0
+        var bestLength = 0
+        var ambiguousBest = false
+        val tied = mutableSetOf<String>()
 
         for (e in entries) {
             val score: Int
@@ -88,34 +111,80 @@ class CommandMatcher private constructor(
                 tp == e.pinyin -> { score = 80; method = "pinyin_exact" }
                 else -> continue
             }
-            if (score > bestScore) {
-                bestScore = score
-                best = Match(e.id, e.action, e.group, e.word, method)
-            }
-        }
-        return best
-    }
-
-    /** 模糊匹配：拼音音节级编辑距离（兜底纠错，仅在精确匹配和文字点击都未命中时用） */
-    fun matchFuzzy(text: String): Match? {
-        val t = collapseDoubled(text.trim())
-        if (t.isEmpty()) return null
-        val tp = pinyinOf(t)
-
-        var best: Match? = null
-        var bestScore = 0.0
-
-        for (e in entries) {
-            val d = pinyinFuzzyDist(tp, e.pinyin)
-            if (d >= 0) {
-                val score = 70 - d * 10
-                if (score > bestScore) {
+            // 自定义绑定不进歧义判定：同分自定义优先是用户显式意图（v0.39.0 既有规则）
+            val isCustom = e.word in customWords
+            when {
+                score > bestScore || (score == bestScore && e.word.length > bestLength) -> {
                     bestScore = score
-                    best = Match(e.id, e.action, e.group, e.word, "pinyin_fuzzy")
+                    bestLength = e.word.length
+                    best = Match(e.id, e.action, e.group, e.word, method)
+                    ambiguousBest = false
+                    tied.clear()
+                }
+                score == bestScore && e.word.length == bestLength && best != null && !isCustom &&
+                    best.action != e.action && best.matchedWord !in customWords -> {
+                    // 同级、同长度却指向相反动作时不按 JSON 排列顺序猜一个。
+                    // 2026-09-28 从 contains(90) 一档推广到全部同级（exact 除外不可能重复；
+                    // pinyin_exact 同音不同动作同理是明确冲突）
+                    ambiguousBest = true
+                    tied.add(best.matchedWord); tied.add(e.word)
                 }
             }
         }
-        return best
+        return if (ambiguousBest) StrictOutcome(null, true, tied.toList()) else StrictOutcome(best, false)
+    }
+
+    /** 模糊匹配：拼音音节级编辑距离（兜底纠错，仅在精确匹配和文字点击都未命中时用）。
+     *  同分且指向不同动作=明确歧义 → 返回 null（2026-09-29 收尾项2：旧实现按词表顺序
+     *  取第一个，等于替用户猜动作）；需要区分「无候选/歧义」的调用方用 [matchFuzzyDetailed] */
+    fun matchFuzzy(text: String): Match? {
+        val outcome = matchFuzzyDetailed(text)
+        return if (outcome.ambiguous) null else outcome.match
+    }
+
+    /** 模糊匹配明细（2026-09-29）：同分、不同动作、双方都非自定义绑定 → Ambiguous
+     *  （自定义豁免：同分自定义优先是 v0.39.0 既有显式规则）；同分同动作=别名等价，取先出现者 */
+    fun matchFuzzyDetailed(text: String): StrictOutcome {
+        val t = collapseDoubled(text.trim())
+        if (t.isEmpty()) return StrictOutcome(null, false)
+        val tp = pinyinOf(t)
+
+        var best: Match? = null
+        var bestScore = -1.0
+        var ambiguousBest = false
+        val tied = mutableSetOf<String>()
+
+        for (e in entries) {
+            val d = pinyinFuzzyDist(tp, e.pinyin)
+            if (d < 0) continue
+            val score = 70 - d * 10
+            val isCustom = e.word in customWords
+            when {
+                score > bestScore -> {
+                    bestScore = score
+                    best = Match(e.id, e.action, e.group, e.word, "pinyin_fuzzy")
+                    ambiguousBest = false
+                    tied.clear()
+                }
+                score == bestScore && best != null -> {
+                    if (e.action != best.action) {
+                        if (best.matchedWord in customWords) {
+                            // 已持有自定义候选：自定义优先，保持
+                        } else if (isCustom) {
+                            // 自定义候选替换标准候选（用户显式意图压过歧义）
+                            best = Match(e.id, e.action, e.group, e.word, "pinyin_fuzzy")
+                            ambiguousBest = false
+                            tied.clear()
+                        } else {
+                            ambiguousBest = true
+                            tied.add(best.matchedWord); tied.add(e.word)
+                        }
+                    }
+                    // 同分同动作 = 同一动作的别名等价，保持先出现者（合并语义）
+                }
+            }
+        }
+        return if (ambiguousBest) StrictOutcome(null, true, tied.toList()) else StrictOutcome(best, false)
     }
 
     /** 在候选词里找与 text 拼音最接近的词（文字点击目标纠错，如「抖婴」→「抖音」）；无相近返回 null */
@@ -305,18 +374,21 @@ class CommandMatcher private constructor(
                         }
                     }
                 }
+                val customs = mutableSetOf<String>()
                 for ((phrase, action) in customBindings) {
                     val base = entries.firstOrNull { it.action == action }
                     if (base != null) {
                         entries.add(0, Entry(base.id, base.action, base.group, phrase, pinyinOf(phrase)))
+                        customs.add(phrase)
                     } else if (action.startsWith("tap_number_") || action.startsWith("grid_tap_")) {
                         // 数字绑定（v0.50.0）：commands.json 无本体可搭车，自成条目前插（自定义优先）。
                         // action 合法性由 CustomBindings.isValidAction 在存储层把关，此处信任存储
                         entries.add(0, Entry("custom_$action", action, "custom", phrase, pinyinOf(phrase)))
+                        customs.add(phrase)
                     }
                     // 动作既不存在也非数字 → 跳过（UI 只列可绑动作，正常不会发生）
                 }
-                CommandMatcher(entries)
+                CommandMatcher(entries, customs)
             } catch (e: Exception) {
                 CommandMatcher(emptyList())
             }

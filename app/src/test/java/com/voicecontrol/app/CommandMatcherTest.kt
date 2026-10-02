@@ -35,9 +35,45 @@ class CommandMatcherTest {
         assertEquals("go_back", matcher.matchStrict("返回")?.action)
     }
 
+    @Test fun `包含匹配优先选择更长的具体命令`() {
+        val media = CommandMatcher.fromJson(
+            """{"groups":[{"id":"media","name":"媒体","commands":[
+              {"id":"play","command":"播放","aliases":["播放音乐","接着播放"],"action":"play_media"},
+              {"id":"pause","command":"暂停","aliases":["暂停播放"],"action":"pause_media"}
+            ]}]}"""
+        )
+        assertEquals("pause_media", media.matchStrict("暂停播放")?.action)
+        assertEquals("pause_media", media.matchStrict("暂停播放后")?.action)
+        assertEquals("play_media", media.matchStrict("播放音乐")?.action)
+        assertNull(media.matchStrict("先暂停然后播放"))
+    }
+
+    @Test fun `生产词表暂停播放优先于播放且播放音乐仍播放`() {
+        // 直接读取 App 运行时使用的 commands.json，避免测试词表和实际词表慢慢分叉。
+        val productionFile = java.io.File("src/main/assets/commands.json")
+        assertEquals(true, productionFile.isFile)
+        val production = CommandMatcher.fromJson(productionFile.readText(Charsets.UTF_8))
+        assertEquals("pause_media", production.matchStrict("请暂停播放")?.action)
+        assertEquals("play_media", production.matchStrict("播放音乐")?.action)
+        assertEquals("volume_up", production.matchStrict("增加音量")?.action)
+        assertEquals("volume_down", production.matchStrict("降低音量")?.action)
+        assertEquals("show_grid", production.matchStrict("显示网格")?.action)
+        assertEquals("hide_grid", production.matchStrict("取消网格")?.action)
+        assertNull(production.matchStrict("先暂停然后播放"))
+    }
+
     @Test fun `主页别名已下架 不再匹配`() {
         // v0.55.13 用户拍板：主页/回主页/最近应用/关闭 属高频误触别名，下架
         assertNull(matcher.matchStrict("主页"))
+    }
+
+    @Test fun `上一页别名已下架 不再匹配`() {
+        // v0.57.24 用户拍板：删「上一页/返回上一页」（go_back 别名收窄为 后退）。
+        // 注意「返回上一页」整句仍会经 contains 命中「返回」（词表词是子串）——合理：
+        // 用户说了「返回」意图明确；下架针对的是**单独**「上一页」这个歧义说法
+        assertNull(matcher.matchStrict("上一页"))
+        assertEquals("go_back", matcher.matchStrict("返回上一页")?.action)   // contains「返回」
+        assertEquals("go_back", matcher.matchStrict("后退")?.action)        // 其余别名不受影响
     }
 
     // ===== 包含匹配（多字/漏字） =====
@@ -280,7 +316,7 @@ class CommandMatcherTest {
                     { "id": "swipe_down",  "command": "向下轻扫",  "aliases": ["向下滑动", "下滑", "往下滑"], "action": "swipe_down" },
                     { "id": "swipe_left",  "command": "向左轻扫",  "aliases": ["向左滑动", "左滑", "往左滑"], "action": "swipe_left" },
                     { "id": "swipe_right", "command": "向右轻扫",  "aliases": ["向右滑动", "右滑", "往右滑"], "action": "swipe_right" },
-                    { "id": "go_back",     "command": "返回",      "aliases": ["后退", "上一页"],           "action": "go_back" },
+                    { "id": "go_back",     "command": "返回",      "aliases": ["后退"],                    "action": "go_back" },
                     { "id": "go_home",     "command": "前往主屏幕","aliases": ["回主屏幕", "回桌面", "回首页"], "action": "go_home" },
                     { "id": "tap",         "command": "轻点",      "aliases": ["点一下", "单击"],         "action": "tap" },
                     { "id": "open_recents","command": "打开 App 切换器", "aliases": ["最近任务", "后台"],   "action": "open_recents" }
@@ -289,5 +325,64 @@ class CommandMatcherTest {
               ]
             }
         """.trimIndent()
+    }
+
+    // ===== 模糊匹配同分歧义（2026-09-29 收尾项2） =====
+    // 构造说明：「大腾」(da teng) 对「拉灯」(la deng) 与「拉风」(la feng) 距离同为 1.0
+    // （各两个半差音节：da/la、teng/deng、teng/feng 均声母差韵母同=0.5）——同分不同动作的真实形态。
+
+    private fun tieJson(reverse: Boolean, sameAction: Boolean = false): String {
+        val a = """{"id":"lamp","command":"拉灯","aliases":[],"action":"light_on"}"""
+        val b = if (sameAction)
+            """{"id":"fan2","command":"拉风","aliases":[],"action":"light_on"}"""
+        else
+            """{"id":"fan2","command":"拉风","aliases":[],"action":"fan_speed"}"""
+        val cmds = if (reverse) "$b,$a" else "$a,$b"
+        return """{"groups":[{"id":"g","name":"t","commands":[$cmds]}]}"""
+    }
+
+    @Test fun `模糊同分不同动作判歧义且正反序一致`() {
+        val forward = CommandMatcher.fromJson(tieJson(reverse = false))
+        val reversed = CommandMatcher.fromJson(tieJson(reverse = true))
+        val f = forward.matchFuzzyDetailed("大腾")
+        val r = reversed.matchFuzzyDetailed("大腾")
+        org.junit.Assert.assertTrue("正序应判歧义，实际=$f", f.ambiguous)
+        org.junit.Assert.assertTrue("倒序应判歧义，实际=$r", r.ambiguous)
+        org.junit.Assert.assertEquals(setOf("拉灯", "拉风"), f.tiedWords.toSet())
+        org.junit.Assert.assertEquals(setOf("拉灯", "拉风"), r.tiedWords.toSet())
+        // 旧口径 matchFuzzy 对歧义返回 null（兼容既有调用方语义）
+        assertNull(forward.matchFuzzy("大腾"))
+        assertNull(reversed.matchFuzzy("大腾"))
+    }
+
+    @Test fun `模糊同分同动作取先出现者不判歧义`() {
+        val forward = CommandMatcher.fromJson(tieJson(reverse = false, sameAction = true))
+        val reversed = CommandMatcher.fromJson(tieJson(reverse = true, sameAction = true))
+        // 同动作的两个词是别名等价关系——先出现者胜，两边都不歧义且动作一致
+        assertEquals("light_on", forward.matchFuzzy("大腾")?.action)
+        assertEquals("light_on", reversed.matchFuzzy("大腾")?.action)
+        org.junit.Assert.assertFalse(forward.matchFuzzyDetailed("大腾").ambiguous)
+        org.junit.Assert.assertFalse(reversed.matchFuzzyDetailed("大腾").ambiguous)
+    }
+
+    @Test fun `模糊同分自定义绑定优先于歧义判定`() {
+        // v0.39.0 既有规则：同分自定义优先=用户显式意图。绑定词与标准词同分且动作不同 → 自定义胜
+        val m = CommandMatcher.fromJson(
+            tieJson(reverse = false),
+            customBindings = listOf("拉崩" to "light_on"),   // la beng 对「大腾」同为 1.0
+        )
+        val outcome = m.matchFuzzyDetailed("大腾")
+        org.junit.Assert.assertFalse(outcome.ambiguous)
+        assertEquals("light_on", outcome.match?.action)
+        assertEquals("拉崩", outcome.match?.matchedWord)
+    }
+
+    @Test fun `既有模糊救回路径不受同分歧义影响`() {
+        // 历史实锤救回样本：经变/经典→轻点、放回→返回（各自唯一最近候选，无同分冲突）
+        assertEquals("tap", matcher.matchFuzzy("经变")?.action)
+        assertEquals("tap", matcher.matchFuzzy("经典")?.action)
+        assertEquals("go_back", matcher.matchFuzzy("放回")?.action)
+        org.junit.Assert.assertFalse(matcher.matchFuzzyDetailed("经变").ambiguous)
+        org.junit.Assert.assertFalse(matcher.matchFuzzyDetailed("放回").ambiguous)
     }
 }

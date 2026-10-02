@@ -14,7 +14,7 @@
         { "id": "swipe_down",  "command": "向下轻扫",     "aliases": ["向下滑动", "下滑", "往下滑", "向下滚动", "往下滚", "下滚"], "action": "swipe_down" },
         { "id": "swipe_left",  "command": "向左轻扫",     "aliases": ["向左滑动", "左滑", "往左滑", "向左滚动", "往左滚"], "action": "swipe_left" },
         { "id": "swipe_right", "command": "向右轻扫",     "aliases": ["向右滑动", "右滑", "往右滑", "向右滚动", "往右滚"], "action": "swipe_right" },
-        { "id": "go_back",     "command": "返回",         "aliases": ["后退", "上一页", "返回上一页"], "action": "go_back" },
+        { "id": "go_back",     "command": "返回",         "aliases": ["后退"], "action": "go_back" },
         { "id": "go_home",     "command": "前往主屏幕",   "aliases": ["回主屏幕", "回桌面", "回首页", "桌面"], "action": "go_home" },
         { "id": "open_recents","command": "打开 App 切换器", "aliases": ["最近任务", "后台任务", "后台"], "action": "open_recents" },
         { "id": "tap",         "command": "轻点",         "aliases": ["点一下", "单击"], "action": "tap" },

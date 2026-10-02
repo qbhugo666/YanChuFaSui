@@ -50,9 +50,15 @@
         <!-- exported=true 仅开发期：允许 adb 注入 SIMULATE 命令做真机自动化验证（商用前改回 false 并移除 SIMULATE） -->
         <service
             android:name=".VoiceService"
-            android:exported="true"
+            android:exported="${voiceServiceExported}"
             android:foregroundServiceType="microphone" />
 
+        <!-- 仅分享用户主动导出的缓存反馈，随机文件名、只读临时授权。 -->
+        <provider
+            android:name=".FeedbackShareProvider"
+            android:authorities="${applicationId}.feedback"
+            android:exported="false"
+            android:grantUriPermissions="true" />
         <!-- 无障碍服务：v0.47.0 起注册名为伪装类路径（微信白名单按类名匹配），
              实际类继承 VoiceControlService，全部功能不变 -->
         <service
