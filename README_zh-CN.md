@@ -1,176 +1,205 @@
-﻿<div align="center">
+<div align="center">
+
+<img src="website/assets/tile-logo.png" width="88" alt="言出法随图标" />
 
 # 言出法随 · YanChuFaSui
 
-**让 Android 手机听懂你的话。**
+### 把点击、滑动、打字，交给声音。
 
-[![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/qb200310-hash/YanChuFaSui)](../../releases)
-[![Platform](https://img.shields.io/badge/platform-Android%207.0%2B-3DDC84.svg)](#安装方法)
-[![Offline](https://img.shields.io/badge/processing-fully%20offline-0A84FF.svg)](#隐私)
+一个把**中文语音变成手机操作**的 Android 开源工具。<br>
+为手部操作不便的人，也为希望减少触摸操作的人，提供另一种使用手机的方式。
 
-**语言 / Language**：简体中文 ｜ [English](README_en.md)
+[![Release](https://img.shields.io/github/v/release/qbhugo666/YanChuFaSui?style=flat-square&color=246BFE)](https://github.com/qbhugo666/YanChuFaSui/releases/latest)
+[![Android](https://img.shields.io/badge/Android-7.0%2B-3DDC84?style=flat-square)](#开始使用)
+[![Offline](https://img.shields.io/badge/语音处理-完全离线-246BFE?style=flat-square)](#隐私与权限)
+[![License](https://img.shields.io/badge/License-Apache--2.0-111111?style=flat-square)](LICENSE)
+
+**[下载正式版](https://github.com/qbhugo666/YanChuFaSui/releases/latest)** · **[看功能演示](#看看声音能做什么)** · **[查看常用指令](#先记住这几句话)** · **[反馈问题](https://github.com/qbhugo666/YanChuFaSui/issues)**
+
+简体中文 ｜ [English](README_en.md)
 
 </div>
 
 ---
 
-> 「言出法随」——说出口的指令，随即被执行。
+## 你的下一次点击，可以从一句话开始
 
-## 看看它怎么工作
+> **「显示编号」 → 「点击十八」**<br>
+> 屏幕上的按钮有了编号，说出数字，就能点击对应目标。
 
-**屏幕编号：说「显示编号」，再说「点击 18」**
+每天，我们都在手机上重复点击、滑动和输入。<br>
+当这些动作变得困难，浏览内容、发消息、切换应用也会变得费力。
 
-<p align="center">
-  <img src="docs/images/demo-numbers.gif" width="300" alt="屏幕编号演示" />
-</p>
+**言出法随想让更多人自己完成这些日常操作——用说话，代替一部分触摸。**
 
-**语音听写：说「输入」，说话，文字自动进入输入框**
+它借助 Android 无障碍服务，在你正在使用的界面上完成操作。语音识别和命令判断都在手机本地运行，无需账号，也无需把声音发送到云端。
 
-<p align="center">
-  <img src="docs/images/demo-dictation.gif" width="300" alt="语音听写演示" />
-</p>
+## 看看声音能做什么
 
-**语音替换：说「把天气替换成气候」，输入框里的字被纠正**
+下面是已有的功能演示，部分界面来自早期版本。
 
-<p align="center">
-  <img src="docs/images/demo-replace.gif" width="300" alt="语音替换演示" />
-</p>
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <h3>说出编号，点击目标</h3>
+      <p>「显示编号」→「点击十八」</p>
+      <img src="docs/images/demo-numbers.gif" width="265" alt="语音显示屏幕编号，再点击对应目标的演示" />
+    </td>
+    <td align="center" width="50%">
+      <h3>说出方向，继续浏览</h3>
+      <p>「向上滑动」</p>
+      <img src="docs/images/demo-swipe.gif" width="265" alt="使用语音滑动手机页面的演示" />
+    </td>
+  </tr>
+  <tr>
+    <td align="center">
+      <h3>说一句，把文字写进去</h3>
+      <p>进入输入框 →「输入」→ 说出内容</p>
+      <img src="docs/images/demo-dictation.gif" width="265" alt="使用语音听写向输入框写入文字的演示" />
+    </td>
+    <td align="center">
+      <h3>写错的字，也能用嘴改</h3>
+      <p>「把不错替换成很好」</p>
+      <img src="docs/images/demo-replace.gif" width="265" alt="使用语音替换输入框内文字的演示" />
+    </td>
+  </tr>
+</table>
 
-**语音滑动：不碰屏幕，内容照样滚动**
+## 三种定位方式，适应不同界面
 
-<p align="center">
-  <img src="docs/images/demo-swipe.gif" width="300" alt="语音滑动演示" />
-</p>
+| 你遇到的情况 | 可以怎么说 | 手机会怎么做 |
+|---|---|---|
+| 按钮上有文字 | 「点击搜索」 | 查找当前页面的文字目标并点击 |
+| 目标可以被无障碍识别 | 「显示编号」→「点击十八」 | 给目标编号，再按数字定位 |
+| 图标没有文字，或位置不好描述 | 「显示网格」→ 逐级选择格子 →「轻点」 | 用十二宫格缩小范围，再点击格心 |
 
-## 为什么做这个
+**网格点击后会继续保留。** 你可以接着定位、轻点；说「隐藏」再收起浮层。
 
-触摸屏对大多数人来说非常方便。但对另一些用户来说——精确点击一个目标、完成一次长距离滑动、在输入框里打字——这些操作本身就是障碍。
+## 从浏览到编辑，覆盖日常操作
 
-言出法随从一个很朴素的问题开始：**如果一台安卓手机可以几乎完全用语音控制，会怎么样？**
+| 能力 | 例子 |
+|---|---|
+| 点击与长按 | 文字点击、编号点击、轻点、双击、两步式长按 |
+| 浏览与微调 | 上下左右滑动；「向上摇移」等小步移动 |
+| 图片缩放 | 「双指放大」「双指缩小」 |
+| 输入与编辑 | 语音听写、删除、清空输入、移动光标、替换文字 |
+| 系统操作 | 返回、回桌面、最近任务、音量、通知中心、控制中心、锁屏 |
+| 截屏 | 「截屏」，需要 Android 9 或以上 |
+| 重复动作 | 「重复三次」，回放上一动作；最多十次 |
+| 个人习惯 | 自定义指令、个人词典、灵敏度设置、配置导入与导出 |
 
-它不重新设计安卓的界面，也不要求用户学习一套新的系统。它借助 Android 无障碍框架，把语音指令转换成当前屏幕上的真实交互——你看着熟悉的界面，用熟悉的说法，完成熟悉的操作。
+### 让常用操作，变成你习惯的说法
 
-这个项目由真实的无障碍使用需求推动，持续根据日常语音操作反馈完善。
+在设置里选择一个动作，录入自己的说法，就能建立**自定义指令**。自定义说法沿用现有同音、近音匹配规则；个人词典用于常用词的文字纠错。
 
-## 核心能力
+已有的说法和词典可以导出备份，再导入。换手机或分享配置时，可以继续使用熟悉的习惯。
 
-### 屏幕控制
-点击、双击、长按、四方向滑动——通过无障碍服务直接驱动当前界面，无需重复学习新手势。
+## 先记住这几句话
 
-### 网格定位
-当应用没有提供清晰的控件时，说「显示网格」把全屏划成十二宫格并逐级细化，说编号即可触达屏幕任意位置。
+| 想做什么 | 可以说 |
+|---|---|
+| 选中屏幕上的目标 | 「显示编号」→「点击六」 |
+| 定位没有文字的图标 | 「显示网格」→ 选择格子 →「轻点」 |
+| 长按一个目标 | 「长按」→「三」 |
+| 继续浏览 | 「向上滑动」「向左滑动」 |
+| 写入文字 | 进入输入框 →「输入」→ 说出内容 |
+| 修改已经写下的文字 | 「把不错替换成很好」 |
+| 调整声音 | 「增加音量」「降低音量」 |
+| 回到熟悉的位置 | 「返回」「回桌面」「最近任务」 |
+| 再做几次上一动作 | 「重复三次」 |
+| 结束语音控制 | **「退出」** |
 
-### 语音输入与编辑
-说「输入」后说话，文字自动写入输入框；支持逐字删除、移动光标、以及「把 A 替换成 B」的语音纠错。
+「点击搜索」是点击**当前页面上**的目标；文字听写需要页面上有可用输入框。具体效果取决于应用提供的界面结构。
 
-### 系统控制
-返回、主屏幕、最近任务、音量调节（80% 安全上限）、锁屏、通知中心、控制中心。
+## 开始使用
 
-### 自定义指令与个人词典
-用自己的说法绑定任意动作（语音录入，零打字）；人名、地名加入词典后优先识别。
+**当前正式版：0.58.3 · 安装包约 293 MB · Android 7.0+ · ARM64 / ARMv7**
 
-### 全离线处理
-识别引擎与全部语音处理均在设备本地完成，无网络也能完整使用。
+1. 从 **[正式版下载页](https://github.com/qbhugo666/YanChuFaSui/releases/latest)** 下载 APK 并安装。
+2. 打开 App，按照引导授予麦克风权限并开启无障碍服务。
+3. 按机型提示设置电池优化豁免、自启动等后台权限。
+4. 点击「开始控制」，先试一句「显示编号」。
+5. 不需要控制时，说「退出」，结束会话。
 
-## 工作原理
+日常语音操作在手机上完成。部分设备的无障碍自动恢复能力，需要首次由电脑通过 ADB 授权；未授权时仍可使用普通控制，并按提示手动恢复服务。
+
+<details>
+<summary><strong>安装和使用前，你可能想知道</strong></summary>
+
+- **为什么安装包较大？** 内置了离线识别模型，安装后无需为日常识别下载云端服务或联网。
+- **能覆盖升级吗？** 旧正式版可以使用同一正式签名升级。开发 Debug 包与正式版签名不同，不能直接覆盖；已有个人配置时先备份，不要直接卸载。
+- **所有应用都能操作吗？** 效果取决于界面是否提供无障碍节点、输入框及手势支持。部分目标可以用网格定位。
+- **所有 Android 7.0+ 设备功能都相同吗？** 部分系统动作受 Android 版本和厂商限制，例如截屏需要 Android 9+。
+- **嘈杂环境也一定能识别吗？** 不能保证。口音、背景声音、起音缺失和近音词都可能造成听错；聊天也可能误匹配指令。需要操作时开始会话，不用时说「退出」。
+- **重复显示“已全部派发”是什么意思？** 表示动作请求已全部发送，页面最终效果仍以实际界面为准。
+
+</details>
+
+## 隐私与权限
+
+**语音识别与指令解析在设备本地完成。App 没有申请 INTERNET 网络权限。**
+
+- **无需账号或云端识别服务**，断网时仍能进行语音控制。
+- **麦克风**用于控制会话内的语音识别，说「退出」后释放。
+- **无障碍服务**用于读取当前界面目标、派发点击和滑动、编辑文字及调用系统动作。
+- 个人绑定、词典和使用记录保存在设备上；配置备份与问题反馈由你主动导出，分享前可以自行检查内容。
+
+App 有会话超时保护，媒体音量设有 80% 上限。语音控制的实际效果仍需以当前界面为准。
+
+## 开源，也欢迎你一起完善
+
+如果你认同**“每个人都应该有更多操作手机的选择”**，欢迎给项目一个 **Star**，或者转给可能需要它的人。
+
+你也可以通过 [Issue](https://github.com/qbhugo666/YanChuFaSui/issues) 分享使用问题，或提交 PR 改进代码、文档与兼容性。反馈时写清手机型号、Android 版本、想完成的动作和实际结果，会更容易定位问题；无需公开私人聊天或录音。
+
+**[更新日志](CHANGELOG.md)** · **[历史里程碑](MILESTONES.md)** · **[完整命令词表](app/src/main/assets/commands.json)**
+
+<details>
+<summary><strong>开发者：架构、模型与构建</strong></summary>
+
+### 从声音到动作
 
 ```mermaid
-flowchart TD
-    A[麦克风<br>VOICE_COMMUNICATION + AEC/NS/AGC] --> B[Silero VAD<br>语音分句]
-    B --> C[SenseVoice 离线识别<br>int8 · 本机推理]
-    C --> D[同音归一<br>四级命令匹配]
-    D --> E{意图解析}
-    E --> F[UI 节点定位<br>文字/控件匹配]
-    E --> G[编号 / 网格坐标]
-    E --> H[文本操作<br>SET_TEXT · SET_SELECTION]
-    E --> I[系统全局动作<br>返回 · 主屏 · 音量]
-    F & G & H & I --> J[无障碍服务<br>手势派发 → Android UI / 系统]
+flowchart LR
+    A["你的声音"] --> B["Silero VAD<br/>语音分句"]
+    B --> C["SenseVoice<br/>本机转写"]
+    C --> D["命令匹配与参数判断"]
+    D --> E["Android 无障碍服务"]
+    E --> F["点击 · 滑动 · 输入 · 系统操作"]
 ```
 
-每一次动作都带闭环校验：执行后确认界面是否真的发生变化，未生效时自动回退到手势兜底——命令不会「假成功」。
+当前 0.58.3 使用普通离线识别与文字判断流程，实验性声音二审已移除。命令执行结果与使用记录相关联；部分入口能观察页面变化，但派发成功不等于页面业务操作一定完成，也不会自动补点。
 
-## Accessibility
+### 从源码构建
 
-本项目使用 Android 无障碍服务（AccessibilityService）读取界面结构并代为执行交互。它存在的目的，是让**精确触摸不再是使用手机的前提**：
+环境：JDK 17、Gradle 8.5、Android SDK 34。本仓库没有 Gradle Wrapper，需自行准备 Gradle。
 
-- 不要求用户重新学习一个新的手机界面——直接操作 Android 当前的 UI；
-- 常见操作（点击、滑动、输入、系统控制）全部可以用语音完成；
-- 屏幕编号与网格为「说不清位置」的场景提供确定性坐标。
-
-无障碍权限仅用于上述交互，相关数据不在设备外存储。
-
-## Installation
-
-### 普通用户
-
-1. 从 [Releases](../../releases) 下载最新 APK
-2. 安装（允许安装未知来源应用）
-3. 按应用内引导完成：电池优化豁免 → 自启动授权 → 开启无障碍服务
-4. 建议在最近任务中锁定本应用，保持后台长期运行
-
-系统要求：Android 7.0 及以上。
-
-### Build from source
-
-```bash
-# 1. Clone
-git clone https://github.com/qb200310-hash/YanChuFaSui.git
-
-# 2. Download recognition models (~240MB, kept out of the repo)
-powershell -ExecutionPolicy Bypass -File scripts/download_models.ps1
-
-# 3. Build
-gradlew assembleDebug
+```powershell
+git clone https://github.com/qbhugo666/YanChuFaSui.git
+cd YanChuFaSui
 ```
 
-## Examples
+模型文件不进入源码仓库。请按 [SenseVoice 官方下载说明](https://k2-fsa.github.io/sherpa/onnx/sense-voice/pretrained.html) 准备 int8 模型，以及 [Silero VAD 官方下载说明](https://k2-fsa.github.io/sherpa/onnx/vad/silero-vad.html) 的 16 kHz 模型：
 
-| 指令 | 示例 | 动作 |
-|---|---|---|
-| 点击 | 「点击微信」 | 点击匹配的界面元素 |
-| 编号 | 「显示编号」→「点击 18」 | 数字定位到对应元素 |
-| 长按 | 「长按」→「3」 | 长按对应位置 |
-| 滑动 | 「向上滑动」 | 内容向上滚动 |
-| 摇移 | 「向上摇移」 | 小步微调 |
-| 缩放 | 「双指放大」 | 捏合放大当前区域 |
-| 听写 | 「输入」→「今天天气不错」 | 文字写入输入框 |
-| 替换 | 「把不错替换成很好」 | 输入框内语音纠错 |
-| 系统 | 「返回」「回桌面」「增加音量」「锁屏」 | 系统操作 |
-| 结束 | 「退出」 | 结束会话，归还麦克风 |
+| 放入 app/src/main/assets/ 的文件 | 来源 |
+|---|---|
+| `sensevoice.int8.onnx` | 官方 int8 模型包的 `model.int8.onnx`，重命名后放入 |
+| `silero_vad.onnx` | k2-fsa 维护的 16 kHz Silero VAD 模型 |
+| `tokens.txt` | 与 SenseVoice 模型配套，仓库已包含 |
+| `commands.json` | 项目命令词表，仓库已包含 |
 
-## Privacy
+配置 Android SDK 路径后：
 
-言出法随围绕本地处理设计。
+```powershell
+gradle :app:testDebugUnitTest :app:verifySpeechPackage --max-workers=1
+```
 
-对于语音控制而言，语音识别与指令解析**全部在设备本地完成**——应用**未申请 INTERNET 网络权限**，从系统层面就不具备向任何服务器发送数据的能力。无需账号，无云端依赖。
+Debug APK 位于 `app/build/outputs/apk/debug/app-debug.apk`。正式构建使用 `assembleRelease` 与 `verifySpeechReleasePackage`，签名密钥由发布者自行提供，仓库不包含密钥。部分本机实验测试需要未公开的夹具，缺失时只跳过对应实验。
 
-（说明：不含网络权限也意味着不提供在线识别；识别引擎随应用离线内置。）
+</details>
 
-## Roadmap
+## 致谢与许可
 
-**Current（已实现）**：编号与网格定位、四方向滑动与摇移、双指缩放、两步式长按、语音听写与文字编辑、语音替换、自定义指令、个人词典、灵敏度调节、设备控制、崩溃诊断与问题反馈导出。
-
-**Next（规划中，尚未实现）**：
-
-- [ ] 截屏指令
-- [ ] 列表回到顶部 / 底部
-- [ ] 光标移到开头 / 结尾
-- [ ] 滑块控制（音量/亮度/智能家居）
-- [ ] 拖拽（按住移动松手）
-- [ ] 选择文本
-
-完整版本历史：[CHANGELOG.md](CHANGELOG.md) ｜ 里程碑速览：[MILESTONES.md](MILESTONES.md)
-
-## Contributing
-
-欢迎 Issue 与 PR。提交前请先阅读 [MILESTONES.md](MILESTONES.md)（版本里程碑）与 [CHANGELOG.md](CHANGELOG.md)（更新日志）——「能说的 = 能做的」是本项目对指令表的铁律。
-
-## License
+感谢 [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)、[SenseVoice](https://github.com/FunAudioLLM/SenseVoice)、[Silero VAD](https://github.com/snakers4/silero-vad) 和 [pinyin4j](https://github.com/belerweb/pinyin4j)，为离线识别和中文匹配提供基础。
 
 [Apache-2.0](LICENSE) © 2026 黄信豪 (Hugo)
-
-## Acknowledgements
-
-- [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) & [SenseVoice](https://github.com/FunAudioLLM/SenseVoice) —— 离线中文语音识别引擎
-- [pinyin4j](https://github.com/belerweb/pinyin4j) —— 拼音转换

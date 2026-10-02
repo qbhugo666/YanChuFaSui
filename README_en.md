@@ -1,184 +1,206 @@
 <div align="center">
 
+<img src="website/assets/tile-logo.png" width="88" alt="YanChuFaSui icon" />
+
 # YanChuFaSui · 言出法随
 
-**Let an Android phone understand what you say.**
+### Put tapping, scrolling and typing into words.
 
-System-level voice control for Android, built for Chinese users and accessibility.
+An open-source Android tool that turns **spoken Chinese into phone actions**.<br>
+Another way to use a phone for people who find touch difficult or want fewer touch interactions.
 
-[![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/qb200310-hash/YanChuFaSui)](../../releases)
-[![Platform](https://img.shields.io/badge/platform-Android%207.0%2B-3DDC84.svg)](#installation)
-[![Offline](https://img.shields.io/badge/processing-fully%20offline-0A84FF.svg)](#privacy)
+[![Release](https://img.shields.io/github/v/release/qbhugo666/YanChuFaSui?style=flat-square&color=246BFE)](https://github.com/qbhugo666/YanChuFaSui/releases/latest)
+[![Android](https://img.shields.io/badge/Android-7.0%2B-3DDC84?style=flat-square)](#get-started)
+[![Offline](https://img.shields.io/badge/Speech-processing%20offline-246BFE?style=flat-square)](#privacy-and-permissions)
+[![License](https://img.shields.io/badge/License-Apache--2.0-111111?style=flat-square)](LICENSE)
 
-**Language / Language**: [简体中文](README.md) ｜ English
+**[Download](https://github.com/qbhugo666/YanChuFaSui/releases/latest)** · **[See it in action](#see-what-your-voice-can-do)** · **[Report an issue](https://github.com/qbhugo666/YanChuFaSui/issues)**
+
+[简体中文](README.md) ｜ English
 
 </div>
 
 ---
 
-> Spoken commands, executed immediately.
+## Your next tap can start with a sentence
 
-> This page mirrors [README.md](README.md) (English is a full translation of the Chinese doc).
+> **「显示编号」 → 「点击十八」**<br>
+> “Show numbers” → “Tap eighteen”: label on-screen targets, then select one by number.
 
-## Demo
+Tapping, swiping and typing are part of everyday phone use. When those movements are difficult, browsing, writing a message and switching apps become harder too.
 
-**Number overlay**: say "show numbers", then "tap 18" — every tappable element gets labeled.
+**YanChuFaSui helps people perform these everyday actions themselves, using speech for part of the interaction.**
 
-<p align="center">
-  <img src="docs/images/demo-numbers.gif" width="300" alt="Number overlay demo" />
-</p>
+It uses Android accessibility services to act on the interface you are already using. Speech recognition and command parsing run on the phone, without an account or cloud speech service.
 
-**Voice dictation**: say "input", speak — the text lands in the focused search box of WeChat.
+**Commands are currently designed for Chinese.** The English descriptions below explain the actions; they are not an English command pack.
 
-<p align="center">
-  <img src="docs/images/demo-dictation.gif" width="300" alt="Dictation demo" />
-</p>
+## See what your voice can do
 
-**Voice replace**: "replace 天气 with 气候" — the text in the box is corrected by voice.
+These are existing feature demonstrations. Some interfaces are from earlier versions.
 
-<p align="center">
-  <img src="docs/images/demo-replace.gif" width="300" alt="Replace demo" />
-</p>
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <h3>Select a target by number</h3>
+      <p>「显示编号」→「点击十八」</p>
+      <img src="docs/images/demo-numbers.gif" width="265" alt="Show numbered targets and select one by voice" />
+    </td>
+    <td align="center" width="50%">
+      <h3>Keep browsing</h3>
+      <p>「向上滑动」 — swipe up</p>
+      <img src="docs/images/demo-swipe.gif" width="265" alt="Scroll a phone interface by voice" />
+    </td>
+  </tr>
+  <tr>
+    <td align="center">
+      <h3>Speak text into a field</h3>
+      <p>Open a text field →「输入」→ speak</p>
+      <img src="docs/images/demo-dictation.gif" width="265" alt="Dictate text into an input field" />
+    </td>
+    <td align="center">
+      <h3>Correct words by speaking</h3>
+      <p>「把不错替换成很好」</p>
+      <img src="docs/images/demo-replace.gif" width="265" alt="Replace words in a text field by voice" />
+    </td>
+  </tr>
+</table>
 
-**Voice swipe**: scrolling without touching the screen.
+## Three ways to reach a target
 
-<p align="center">
-  <img src="docs/images/demo-swipe.gif" width="300" alt="Swipe demo" />
-</p>
+| Interface | Command | Result |
+|---|---|---|
+| A target has visible text | 「点击搜索」 | Find and tap the matching text on the current screen |
+| Accessibility exposes a target | 「显示编号」→「点击十八」 | Label targets, then select one by number |
+| An icon has no text or its position is hard to describe | 「显示网格」→ choose smaller cells →「轻点」 | Narrow the position using a twelve-cell grid, then tap its center |
 
-> Note: the app UI and commands are in Mandarin Chinese — the recognition engine is Chinese-native by design.
+**The grid remains after a tap**, so you can keep using it. Say 「隐藏」 to hide the overlays.
 
-## Why
+## Everyday actions
 
-Touchscreens are convenient for most people. For others — tapping a small target precisely, swiping a long distance, typing into an input field — these interactions are the barrier.
+| Capability | Examples |
+|---|---|
+| Tapping and holding | Text or numbered targets, center tap, double tap, two-step long press |
+| Browsing | Four-direction swipes and smaller precise nudges |
+| Zooming | Pinch to zoom in or out |
+| Text editing | Dictation, deletion, clearing a field, cursor movement, word replacement |
+| System controls | Back, home, recent apps, volume, notifications, quick settings, lock screen |
+| Screenshot | 「截屏」; Android 9+ required |
+| Repetition | 「重复三次」 repeats the previous action; up to ten repetitions |
+| Personalization | Custom phrases, personal vocabulary, sensitivity, configuration import/export |
 
-YanChuFaSui started from a plain question: **what if an Android phone could be controlled almost entirely by voice?**
+### Keep your own phrases
 
-It does not redesign Android's interface, and it does not ask users to learn a new system. Built on the Android Accessibility framework, it turns spoken commands into real interactions on the current screen — the same UI, the same wording, the same actions.
+Choose an action in Settings, record your phrase and save a **custom command**. Custom phrases use the existing homophone and near-sound matching rules. Personal vocabulary helps correct common words in transcribed text.
 
-The project is driven by real accessibility needs and improved through feedback from everyday voice control.
+Export and import your configuration to preserve those phrases and vocabulary when moving devices or sharing a setup.
 
-## Core capabilities
+## A few commands to start with
 
-### Screen control
-Tap, double-tap, long-press, and four-direction swipes — driven through the Accessibility service on whatever screen is currently shown.
+| Goal | Say |
+|---|---|
+| Tap a numbered target | 「显示编号」→「点击六」 |
+| Reach an unlabeled icon | 「显示网格」→ choose a cell →「轻点」 |
+| Long-press a target | 「长按」→「三」 |
+| Scroll | 「向上滑动」「向左滑动」 |
+| Enter text | Open a text field →「输入」→ speak |
+| Replace words | 「把不错替换成很好」 |
+| Change volume | 「增加音量」「降低音量」 |
+| Navigate | 「返回」「回桌面」「最近任务」 |
+| Repeat the previous action | 「重复三次」 |
+| End voice control | **「退出」** |
 
-### Grid targeting
-When an app doesn't expose clear controls, overlay a numbered 12-cell grid (drillable up to 5 levels) and reach any point on screen by number.
+Text tapping targets the **current interface**. Dictation needs a usable text field. Results depend on the interface exposed by the app.
 
-### Voice typing & editing
-Say a trigger word, speak, and the text lands in the focused input box. Delete character by character, move the cursor, or correct by voice: "replace A with B".
+## Get started
 
-### System control
-Back, home, recents, volume (with an 80% safety cap), lock screen, notification shade, quick settings.
+**Current release: 0.58.3 · APK about 293 MB · Android 7.0+ · ARM64 / ARMv7**
 
-### Custom commands & personal dictionary
-Bind your own phrase to any action — enrolled by voice, no typing. Add names and places to a personal dictionary so they are recognized preferentially.
+1. Download and install the APK from **[Releases](https://github.com/qbhugo666/YanChuFaSui/releases/latest)**.
+2. Follow the app's instructions to grant microphone permission and enable its accessibility service.
+3. Configure battery optimization and background-start permissions as required by your phone.
+4. Start voice control and try 「显示编号」.
+5. Say 「退出」 when you are finished.
 
-### Fully offline
-Recognition and all speech processing run on-device. The app works with no network connection at all.
+Everyday control runs on the phone. Automatic accessibility recovery on some devices needs one-time ADB authorization from a computer. Ordinary control remains available without that authorization, with manual recovery guidance.
 
-## How it works
+<details>
+<summary><strong>Before you install</strong></summary>
+
+- **Why is the APK large?** It includes the offline speech model, so everyday recognition does not require a network service.
+- **Can I upgrade in place?** Official releases use the same signing certificate. Debug builds have a different signature and cannot be overwritten directly by a Release build; back up personal configuration before considering removal.
+- **Does it work in every app?** Support depends on accessible nodes, editable text fields and gesture handling. Grid targeting can help with some otherwise unreachable targets.
+- **Are all features available on Android 7.0+?** Some system actions depend on Android version and manufacturer. Screenshots need Android 9+.
+- **Is recognition guaranteed in noise?** No. Accents, background speech, missing word onsets and similar-sounding phrases can cause errors. Conversation can also match a command; start control when needed and say 「退出」 when finished.
+- **Does “all dispatched” prove completion?** It confirms that action requests were sent. Check the actual interface for the final effect.
+
+</details>
+
+## Privacy and permissions
+
+**Recognition and command parsing run locally. The app does not request the INTERNET permission.**
+
+- No account or cloud speech service is required; voice control works offline.
+- The microphone is used during a control session and released when you say 「退出」.
+- Accessibility is used to locate targets, dispatch taps and swipes, edit text and invoke system actions.
+- Custom phrases, vocabulary and usage records are stored on the device. Configuration and diagnostic feedback are exported only when you choose to share them; you can inspect their contents first.
+
+Control sessions have timeout protection, and media volume is capped at 80%. The actual interface remains the source of truth for action results.
+
+## Open source, and open to your contribution
+
+If you believe people should have more ways to operate their phones, consider **starring the project** or sharing it with someone who could use it.
+
+[Issues](https://github.com/qbhugo666/YanChuFaSui/issues) and pull requests are welcome. Device model, Android version, intended action and observed result help explain a problem. Private conversations and recordings do not need to be posted.
+
+**[Changelog](CHANGELOG.md)** · **[Milestones](MILESTONES.md)** · **[Command table](app/src/main/assets/commands.json)**
+
+<details>
+<summary><strong>Developers: architecture, models and build</strong></summary>
+
+### From speech to action
 
 ```mermaid
-flowchart TD
-    A[Microphone<br>VOICE_COMMUNICATION + AEC/NS/AGC] --> B[Silero VAD<br>utterance segmentation]
-    B --> C[SenseVoice offline ASR<br>int8 · on-device]
-    C --> D[Homophone normalization<br>four-stage command matching]
-    D --> E{Intent resolution}
-    E --> F[UI node search<br>text/control matching]
-    E --> G[Number / grid coordinates]
-    E --> H[Text actions<br>SET_TEXT · SET_SELECTION]
-    E --> I[Global system actions<br>back · home · volume]
-    F & G & H & I --> J[Accessibility service<br>gesture dispatch → Android UI / system]
+flowchart LR
+    A["Your voice"] --> B["Silero VAD<br/>Speech segmentation"]
+    B --> C["SenseVoice<br/>Local transcription"]
+    C --> D["Command matching and parameters"]
+    D --> E["Android accessibility service"]
+    E --> F["Taps · Swipes · Text · System actions"]
 ```
 
-Every action is verified in a closed loop: the service checks whether the UI actually changed, and falls back to gesture dispatch when it didn't — commands never "silently succeed".
-
-## Accessibility
-
-This project uses the Android Accessibility service to read the interface and perform interactions on the user's behalf. Its purpose is to make **precise touch optional rather than a prerequisite**:
-
-- No need to learn a new launcher or interface — it operates the Android UI you already have;
-- Common operations (tap, swipe, typing, system controls) are all available by voice;
-- The number/grid overlays provide deterministic coordinates when words aren't enough.
-
-The Accessibility permission is used only for this interaction; the data it reads is not stored off-device.
-
-## Installation
-
-### Users
-
-1. Download the latest APK from [Releases](../../releases)
-2. Install (allow installing from unknown sources)
-3. Follow the in-app guide: battery optimization exemption → autostart permission → enable the Accessibility service
-4. Recommended: lock the app in Recents so system cleanup never kills it
-
-Requires Android 7.0+.
+Version 0.58.3 uses the ordinary offline recognition and text-routing path. Experimental acoustic review has been removed. Execution records are associated with the initiating utterance; some actions can observe interface changes, but dispatch is not proof of application-level completion. Taps are not automatically retried.
 
 ### Build from source
 
-```bash
-# 1. Clone
-git clone https://github.com/qb200310-hash/YanChuFaSui.git
+Requirements: JDK 17, Gradle 8.5 and Android SDK 34. This repository does not include a Gradle Wrapper.
 
-# 2. Download the recognition models (~240MB, kept out of the repo)
-powershell -ExecutionPolicy Bypass -File scripts/download_models.ps1
-
-# 3. Build
-gradlew assembleDebug
+```powershell
+git clone https://github.com/qbhugo666/YanChuFaSui.git
+cd YanChuFaSui
 ```
 
-## Examples
+Models are not included in the source repository. Follow the official [SenseVoice download instructions](https://k2-fsa.github.io/sherpa/onnx/sense-voice/pretrained.html) for the int8 model and the [Silero VAD instructions](https://k2-fsa.github.io/sherpa/onnx/vad/silero-vad.html) for the 16 kHz model:
 
-| You say | Example | Action |
-|---|---|---|
-| Tap | 「点击微信」 | Taps the matching UI element |
-| Numbers | 「显示编号」→「点击 18」 | Numbered targeting |
-| Long press | 「长按」→「3」 | Long-presses the target |
-| Swipe | 「向上滑动」 | Scrolls the content up |
-| Nudge | 「向上摇移」 | Small precise adjustment |
-| Zoom | 「双指放大」 | Two-finger pinch out |
-| Dictation | 「输入」→「今天天气不错」 | Types text into the focused field |
-| Replace | 「把不错替换成很好」 | Corrects text by voice |
-| System | 「返回」「回桌面」「增加音量」「锁屏」 | System actions |
-| End | 「退出」 | Ends the session, releases the microphone |
+| File in app/src/main/assets/ | Source |
+|---|---|
+| `sensevoice.int8.onnx` | Rename `model.int8.onnx` from the official int8 model archive |
+| `silero_vad.onnx` | The 16 kHz Silero VAD model maintained by k2-fsa |
+| `tokens.txt` | Matching SenseVoice token table; included in this repository |
+| `commands.json` | Project command table; included in this repository |
 
-> Note: the app understands **Mandarin Chinese commands** — the recognition engine is Chinese-native, and the command set above is written in Chinese with meanings annotated.
+After configuring your Android SDK path:
 
-## Privacy
+```powershell
+gradle :app:testDebugUnitTest :app:verifySpeechPackage --max-workers=1
+```
 
-YanChuFaSui is designed around local processing.
+The Debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`. Release builds use `assembleRelease` and `verifySpeechReleasePackage`, with your own signing configuration. Signing keys are not included. Tests for unpublished local experiments skip only their respective experiments when fixtures are unavailable.
 
-Voice recognition and command parsing run **entirely on-device** — the app **does not request the INTERNET permission**, so it has no ability to send data to any server. No account is required, and there is no cloud dependency.
+</details>
 
-(Consequence of this design: there is no online/cloud recognition; the engine ships inside the app.)
+## Credits and license
 
-## Roadmap
-
-**Current**: numbered and grid targeting, four-direction swipe and precise nudge, pinch zoom, two-step long-press, voice dictation and text editing, voice replace, custom commands, personal dictionary, sensitivity tuning, device controls, crash diagnostics and feedback export.
-
-**Next (planned, not yet implemented)**:
-
-- [ ] Screenshot command
-- [ ] Scroll to top / bottom of lists
-- [ ] Move cursor to start / end
-- [ ] Slider control (volume, brightness, smart home)
-- [ ] Drag & drop (press-hold-move-release)
-- [ ] Text selection
-
-Full version history: [CHANGELOG.md](CHANGELOG.md) ｜ Milestones: [MILESTONES.md](MILESTONES.md)
-
-## Contributing
-
-Issues and PRs are welcome. Please read [FEATURES.md](FEATURES.md) (complete feature inventory) and [GUARDRAILS.md](GUARDRAILS.md) (engineering constraints) first — the project's rule for the command table is simple: **everything you can say is something the app can do**.
-
-## License
+Built with [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx), [SenseVoice](https://github.com/FunAudioLLM/SenseVoice), [Silero VAD](https://github.com/snakers4/silero-vad) and [pinyin4j](https://github.com/belerweb/pinyin4j).
 
 [Apache-2.0](LICENSE) © 2026 黄信豪 (Hugo)
-
-## Acknowledgements
-
-- [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) & [SenseVoice](https://github.com/FunAudioLLM/SenseVoice) — offline Chinese ASR engine
-- [pinyin4j](https://github.com/belerweb/pinyin4j) — pinyin conversion
