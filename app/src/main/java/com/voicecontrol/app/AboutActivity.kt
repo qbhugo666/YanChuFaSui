@@ -29,5 +29,8 @@ class AboutActivity : ThemedActivity() {
                 Toast.makeText(this, "打不开浏览器，请稍后再试", Toast.LENGTH_SHORT).show()
             }
         }
+        findViewById<android.view.View>(R.id.row_contact).setOnClickListener {
+            ContactDialog.show(this)
+        }
     }
 }

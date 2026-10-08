@@ -137,6 +137,9 @@ class SettingsActivity : ThemedActivity() {
         findViewById<android.view.View>(R.id.row_about).setOnClickListener {
             startActivity(Intent(this, AboutActivity::class.java))
         }
+        findViewById<android.view.View>(R.id.row_contact).setOnClickListener {
+            ContactDialog.show(this)
+        }
 
         // 请作者喝杯咖啡 → 爱发电
         findViewById<android.view.View>(R.id.row_coffee).setOnClickListener {
