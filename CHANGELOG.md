@@ -2,7 +2,7 @@
 
 ## [未发布]
 
-## [0.60.0] - 2026-10-08
+## [0.59.2] - 2026-10-08
 
 ### 新增
 
@@ -10,7 +10,7 @@
 
 ### 发布
 
-- versionName 0.60.0，versionCode 160；正式签名 APK 支持 Android 7.0 及以上、ARM64 和 ARMv7。
+- versionName 0.59.2，versionCode 160；正式签名 APK 支持 Android 7.0 及以上、ARM64 和 ARMv7。
 
 ## [0.59.1] - 2026-10-08
 
