@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#edf1f5">
+  <meta name="description" content="言出法随，用中文语音操作 Android 手机。了解网格定位、灵敏度调节与语音输入，让更多人按自己的方式使用手机。">
+  <title>言出法随 · 用中文语音操作手机</title>
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="言出法随">
+  <meta property="og:title" content="言出法随 · 用中文语音操作手机">
+  <meta property="og:description" content="说出指令，完成点击、滑动与输入。为手部操作受限的人，多一种操作方式。">
+  <meta property="og:url" content="https://yanchufasui.pages.dev/">
+  <meta property="og:image" content="https://yanchufasui.pages.dev/assets/tile-logo.png">
+  <meta property="og:image:width" content="256">
+  <meta property="og:image:height" content="256">
+  <meta property="og:image:alt" content="言出法随 Logo">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="言出法随 · 用中文语音操作手机">
+  <meta name="twitter:description" content="说出指令，完成点击、滑动与输入。为手部操作受限的人，多一种操作方式。">
+  <meta name="twitter:image" content="https://yanchufasui.pages.dev/assets/tile-logo.png">
+  <link rel="icon" href="assets/tile-logo.png">
+  <style>
+    :root{color-scheme:light;--canvas:#edf1f5;--surface:#f9fbfd;--ink:#213047;--quiet:#526278;--muted:#5e6d80;--blue:#246bfe;--deep-blue:#1754c8;--line:#d6dfe9;--shadow:14px 14px 36px #bac7d34d,-10px -10px 30px #ffffffd9;--inset:inset 5px 5px 14px #b9c5d64d,inset -5px -5px 14px #ffffff;}
+    *{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:36px}body{margin:0;background:var(--canvas);color:var(--ink);font-family:"PingFang SC","Microsoft YaHei UI","Microsoft YaHei",sans-serif;-webkit-font-smoothing:antialiased}a{color:inherit;text-decoration:none}button,input{font:inherit}img,svg{display:block;max-width:100%}button,a,summary{touch-action:manipulation;-webkit-tap-highlight-color:transparent}a,summary{transition:color .2s ease-out,background .2s ease-out,transform .2s ease-out,box-shadow .2s ease-out}:focus-visible{outline:3px solid var(--blue);outline-offset:5px}h1,h2,h3,p,figure{margin:0}h1,h2,h3{font-weight:650}h2{font-size:clamp(32px,3.5vw,46px);line-height:1.4;letter-spacing:-.03em;text-wrap:balance}p{line-height:1.9}em{font-style:normal;color:var(--deep-blue)}.wrap{width:min(1160px,calc(100% - 96px));margin-inline:auto}.section{padding-block:110px}.icon{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;flex:none}.skip{position:fixed;z-index:20;top:12px;left:12px;transform:translateY(-160%);background:white;padding:14px;border-radius:12px}.skip:focus{transform:none}.brand{display:inline-flex;align-items:center;gap:11px;font-size:19px;font-weight:650;white-space:nowrap}.logo{width:34px;height:34px;border-radius:11px;display:grid;place-items:center;background:var(--blue);box-shadow:0 5px 12px #246bfe26;flex:none}.logo img{width:22px;height:auto}.header{height:94px;display:flex;align-items:center;justify-content:space-between;gap:24px}.nav{display:flex;align-items:center;gap:28px;font-size:14px;color:var(--quiet)}.nav a{padding-block:12px}.nav a:hover,.text-link:hover{color:var(--deep-blue)}.draft-link{display:inline-flex;align-items:center;gap:8px}.draft-link span{border-radius:50%;background:#dfe8f7;width:22px;height:22px;display:grid;place-items:center;color:var(--deep-blue);font-size:12px}.button{display:inline-flex;align-items:center;justify-content:center;gap:12px;min-height:54px;padding:15px 25px;border-radius:17px;font-size:16px;font-weight:600;background:var(--surface);box-shadow:5px 5px 15px #bcc8d64d,-5px -5px 15px #fff}.button.primary{color:white;background:var(--blue);box-shadow:0 10px 24px #246bfe30,inset 0 1px 0 #ffffff33}.button:active{transform:translateY(0) scale(.98);box-shadow:var(--inset)}.actions{display:flex;flex-wrap:wrap;gap:16px}.hero{position:relative;isolation:isolate;min-height:100svh}.hero::before{content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;background:radial-gradient(ellipse at 76% 42%,#dae6fc 0,transparent 48%)}.hero-body{display:grid;grid-template-columns:1.1fr 1fr;align-items:center;gap:70px;min-height:calc(100svh - 158px);padding-block:55px}.hero-lockup{display:flex;align-items:center;gap:18px;margin-bottom:26px}.hero-lockup .logo{width:64px;height:64px;border-radius:20px;box-shadow:0 12px 26px #246bfe27}.hero-lockup img{width:39px}h1{font-size:clamp(45px,5vw,64px);line-height:1.3;letter-spacing:.025em}.hero-tagline{font-size:clamp(29px,3.2vw,42px);line-height:1.55;font-weight:500;letter-spacing:-.02em}.hero-copy>p{font-size:18px;color:var(--quiet);margin:22px 0 30px}.hero-caption{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px;margin-top:22px}.hero-caption::before{content:"";width:6px;height:6px;background:var(--blue);border-radius:50%}.scroll-cue{height:64px;display:flex;align-items:center;justify-content:center;gap:13px;color:var(--quiet);font-size:13px}.scroll-cue .icon{width:16px;height:16px}.hero-media{justify-self:center;width:100%;max-width:330px}.media-slot{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:17px;text-align:center;background:#e8eef5;box-shadow:var(--inset);border:1px solid #dce4ef;border-radius:22px;color:var(--quiet);overflow:hidden;padding:25px}.phone-shell{padding:10px;border-radius:36px;background:#f8fafc;box-shadow:18px 20px 42px #a9b8ce59,-10px -10px 30px #fff;border:1px solid #ffffffb3;width:258px;max-width:100%;margin-inline:auto}.phone-shell .media-slot{aspect-ratio:9/18.8;border-radius:27px}.slot-id{position:absolute;top:19px;left:19px;font-size:11px;letter-spacing:.08em;padding:5px 8px;background:#f9fbfd;border-radius:7px;color:var(--quiet)}.slot-symbol{width:60px;height:60px;border-radius:18px;display:grid;place-items:center;box-shadow:6px 6px 15px #bcc9d666,-6px -6px 15px #fff;color:var(--deep-blue)}.slot-symbol .icon{width:27px;height:27px}.slot-title{font-size:18px;font-weight:600;color:var(--ink)}.slot-description{font-size:13px;line-height:1.85;max-width:22em}.slot-status{font-size:12px;color:var(--deep-blue);border:1px dashed #99afd1;border-radius:999px;padding:5px 12px}.media-caption{font-size:12px;color:var(--muted);text-align:center;margin-top:17px;line-height:1.8}.media-spec{margin-top:14px;font-size:13px;color:var(--quiet);text-align:left}.media-spec summary{cursor:pointer;list-style:none;display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--line)}summary::-webkit-details-marker{display:none}.media-spec summary::after{content:"+";color:var(--deep-blue);font-size:18px}.media-spec[open] summary::after{content:"−"}.media-spec p{margin-top:12px;font-size:13px}.context{border-top:1px solid #d9e1ea}.section-heading{display:flex;align-items:flex-end;justify-content:space-between;gap:50px;margin-bottom:44px}.section-heading>p{max-width:365px;color:var(--quiet);font-size:16px}.eyebrow{font-size:14px;color:var(--deep-blue);margin-bottom:17px;font-weight:500}.context-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:26px}.context-card{position:relative;background:var(--surface);border:1px solid #ffffff;border-radius:26px;padding:30px;box-shadow:var(--shadow);display:flex;flex-direction:column;gap:20px}.context-card h3{font-size:21px;line-height:1.5}.card-number{font-size:12px;color:var(--muted);margin-bottom:16px}.context-card p{font-size:15px;color:var(--quiet)}.context-card strong{font-weight:600;color:var(--ink)}.context-card .source{font-size:12px;color:var(--quiet);margin-top:auto;padding-top:8px}.source a{text-decoration:underline;text-underline-offset:4px}.cross{font-size:24px;font-weight:400;color:#b44249;margin-left:8px}.languages{font-size:12px;margin-top:12px}.languages summary{cursor:pointer;color:var(--deep-blue)}.languages p{font-size:12px;margin-top:9px}.context-end{margin-top:34px;color:var(--quiet);font-size:16px}.context-end strong{color:var(--deep-blue);font-weight:500}.feature-section{border-top:1px solid #d9e1ea}.feature-layout{display:grid;grid-template-columns:1fr 1fr;gap:90px;align-items:center}.feature-copy h2{margin-bottom:23px}.feature-copy>p{font-size:17px;color:var(--quiet);max-width:480px}.feature-label{display:flex;align-items:center;gap:11px;margin-bottom:20px;color:var(--deep-blue);font-size:14px}.feature-label .symbol{display:grid;place-items:center;width:42px;height:42px;border-radius:14px;background:#e5edfa;box-shadow:4px 4px 12px #c1cee16b,-4px -4px 12px #fff}.steps{list-style:none;padding:0;margin:32px 0 0;display:flex;flex-direction:column;gap:17px;color:var(--quiet);font-size:15px}.steps li{display:flex;align-items:center;gap:14px}.steps span{width:28px;height:28px;display:grid;place-items:center;flex:none;background:var(--surface);box-shadow:3px 3px 9px #c6cfdb80,-3px -3px 9px #fff;border-radius:10px;color:var(--deep-blue);font-size:12px}.feature-media{border-radius:34px;padding:36px 36px 25px;background:#e7edf4;box-shadow:var(--inset);min-width:0}.feature-media .phone-shell{width:242px}.feature-media .media-spec{max-width:370px;margin-inline:auto}.grid-feature .feature-media{background:radial-gradient(ellipse at 50% 40%,#d8e5ff,#e8eef5 72%)}.subtle-facts{display:flex;flex-wrap:wrap;gap:10px;margin-top:27px}.subtle-facts span{font-size:13px;border:1px solid #cbd8e9;padding:8px 13px;border-radius:10px;color:var(--quiet)}.sensitivity-layout{grid-template-columns:1fr 1.05fr}.setting-media{padding:25px;border-radius:28px;background:var(--surface);box-shadow:var(--shadow);min-width:0}.setting-media .media-slot{aspect-ratio:3/2;min-height:265px}.setting-media .media-caption{text-align:left}.input-layout .feature-media{order:0}.input-layout .feature-copy{order:1}.more-functions{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:13px 22px;margin-top:70px;padding-top:28px;border-top:1px solid var(--line);color:var(--quiet);font-size:14px}.more-functions strong{font-weight:500;color:var(--ink)}.more-functions span{white-space:nowrap}.mission{position:relative;isolation:isolate;text-align:center;padding:130px 0 115px;border-top:1px solid #d9e1ea}.mission::before{content:"";position:absolute;inset:0;z-index:-1;background:radial-gradient(ellipse at 50% 65%,#ffffffc9,transparent 68%);pointer-events:none}.mission .logo{margin:0 auto 32px;width:54px;height:54px;border-radius:17px}.mission .logo img{width:32px}.mission h2{font-size:clamp(34px,4vw,52px);line-height:1.45}.mission p{max-width:670px;margin:28px auto 0;color:var(--quiet);font-size:18px;line-height:2}.mission-sign{display:inline-flex;gap:14px;align-items:center;font-size:13px;color:var(--deep-blue);margin-top:35px}.mission-sign::before,.mission-sign::after{content:"";width:30px;height:1px;background:#b6c9e8}.footer{border-top:1px solid var(--line);padding-block:30px 34px}.footer-top{display:flex;align-items:center;justify-content:space-between;gap:25px;font-size:13px;color:var(--quiet)}.footer-links{display:flex;flex-wrap:wrap;gap:22px}.footer-note{display:flex;justify-content:space-between;gap:20px;font-size:12px;color:var(--muted);margin-top:20px;line-height:1.9}.material-guide{margin-bottom:28px;border-bottom:1px solid var(--line);padding-bottom:22px}.material-guide>summary{cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:20px;color:var(--quiet);font-size:14px;list-style:none}.material-guide>summary::after{content:"+";font-size:22px;color:var(--deep-blue)}.material-guide[open]>summary::after{content:"−"}.material-guide .guide-content{padding-top:24px}.guide-intro{font-size:14px;color:var(--quiet);margin-bottom:20px}.guide-list{display:grid;grid-template-columns:1fr 1fr;gap:16px}.guide-item{border:1px solid var(--line);border-radius:16px;padding:20px}.guide-item h3{font-size:15px;margin-bottom:8px}.guide-item p{font-size:13px;color:var(--quiet)}.guide-item code{font-size:12px;overflow-wrap:anywhere;color:var(--deep-blue)}.guide-note{font-size:13px;color:var(--quiet);margin-top:20px}.reveal.entered{animation:arrive .65s ease-out both}@keyframes arrive{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:none}}
+    @media(hover:hover) and (pointer:fine){.button:hover{transform:translateY(-3px);box-shadow:8px 10px 22px #bac7d366,-5px -5px 15px #fff}.button.primary:hover{box-shadow:0 14px 28px #246bfe40}.context-card{transition:transform .2s ease-out,box-shadow .2s ease-out}.context-card:hover{transform:translateY(-4px);box-shadow:18px 20px 38px #b5c4d45c,-10px -10px 30px #fff}.button:active{transform:translateY(0) scale(.98)}}
+    .media-slot{width:100%;min-width:0}.hero::before{bottom:auto;height:100svh}
+    @media(min-width:1600px){.hero-body{gap:125px}.hero-media{max-width:360px}.hero-media .phone-shell{width:290px}}
+    @media(max-width:1000px){.wrap{width:calc(100% - 64px)}.hero-body{gap:30px;grid-template-columns:1.05fr 1fr}.hero-lockup{gap:12px}h1{font-size:46px}.hero-lockup .logo{width:52px;height:52px;border-radius:16px}.hero-lockup img{width:31px}.hero-tagline{font-size:32px}.hero-media .phone-shell{width:230px}.section{padding-block:85px}.section-heading{display:block}.section-heading>p{margin-top:20px;max-width:620px}.context-grid{gap:18px}.context-card{padding:23px}.feature-layout{gap:44px}.feature-media{padding:27px 22px 22px}.setting-media{padding:20px}.nav{gap:20px}.mission{padding-block:100px}}
+    @media(max-width:760px){.wrap{width:calc(100% - 40px)}.header{height:78px}.brand{font-size:16px}.brand .logo{width:30px;height:30px}.nav{gap:20px;font-size:12px}.nav .desktop-link{display:none}.hero-body{grid-template-columns:1fr;min-height:0;padding-block:48px 30px;gap:46px}.hero-copy{text-align:center}.hero-lockup{justify-content:center}.hero-copy>p{font-size:16px;max-width:300px;margin-inline:auto}.hero-tagline{font-size:31px}.hero-caption,.actions{justify-content:center}.hero-lockup h1{font-size:44px}.hero-media{max-width:300px}.hero-media .phone-shell{width:245px}.hero-media .media-spec{margin-top:8px}.scroll-cue{height:70px}.section{padding-block:68px}.section-heading{margin-bottom:30px}h2{font-size:32px}.context-grid{grid-template-columns:1fr;gap:22px}.context-card{padding:25px;gap:15px}.card-number{margin-bottom:8px}.context-card h3{font-size:21px}.context-card p{font-size:15px}.context-end{font-size:15px}.feature-layout{grid-template-columns:1fr;gap:35px}.feature-copy>p{font-size:16px}.feature-media{padding:26px 22px 20px;max-width:470px;width:100%;justify-self:center}.feature-media .phone-shell{width:230px}.input-layout .feature-copy{order:0}.input-layout .feature-media{order:1}.setting-media .media-slot{min-height:250px}.steps{margin-top:25px}.more-functions{margin-top:42px;justify-content:flex-start;gap:12px 18px;font-size:13px}.more-functions strong{flex-basis:100%}.mission{padding-block:85px}.mission h2{font-size:32px}.mission p{font-size:16px;text-align:left;max-width:420px}.footer-top,.footer-note{flex-direction:column;align-items:flex-start;gap:15px}.guide-list{grid-template-columns:1fr}.footer-links{gap:18px}}
+    @media(max-width:360px){.wrap{width:calc(100% - 32px)}.nav{gap:12px}.brand{font-size:15px}.hero-lockup h1{font-size:38px}.hero-lockup .logo{width:45px;height:45px}.hero-tagline{font-size:28px}.actions{gap:12px}.button{font-size:14px;padding:13px 17px;min-height:49px}h2{font-size:29px}.media-slot{padding:20px}.feature-media{padding:20px 16px}.setting-media{padding:17px}.slot-title{font-size:17px}.setting-media .slot-description{font-size:12px}.mission h2{font-size:29px}}
+    @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*,*::before,*::after{animation:none!important;transition:none!important}.button:hover,.context-card:hover{transform:none}}
+    .audience{border-top:1px solid var(--line)}.audience-layout{display:grid;grid-template-columns:1fr 1.15fr;gap:80px;align-items:start}.audience-copy{max-width:590px;color:var(--quiet);font-size:17px}.audience-copy p+p{margin-top:22px}.audience-copy .audience-bridge{margin-top:32px;font-size:20px;font-weight:500}.landscape-grid{display:grid;grid-template-columns:1fr 1.12fr;gap:48px;align-items:stretch}.platform-pair{padding:8px 0}.platform-entry{padding:22px 8px 30px}.platform-entry+.platform-entry{border-top:1px solid var(--line);padding-top:30px}.platform-entry h3{font-size:24px;margin-bottom:16px}.platform-entry p{font-size:16px;color:var(--quiet)}.platform-entry strong{color:var(--ink);font-weight:600}.platform-entry .source{margin-top:18px;font-size:12px;color:var(--quiet)}.google-card{padding:36px 40px;gap:20px}.google-card .platform-name{font-size:15px;font-weight:500}.google-card h3{font-size:58px;line-height:1.15;letter-spacing:-.03em}.google-card .cross{font-size:44px;margin-left:20px}.google-card .google-statement{font-size:24px;line-height:1.55;color:var(--ink)}.other-platforms{font-size:14px;color:var(--muted);max-width:880px;margin-top:32px;padding-top:24px;border-top:1px solid var(--line)}.mission .creator-story{font-size:16px;max-width:640px;line-height:2.1;margin-top:36px;text-align:left;text-wrap:pretty}
+    @media(max-width:1000px){.audience-layout{gap:44px}.landscape-grid{gap:28px}.google-card{padding:30px}}
+    @media(max-width:760px){.audience-layout,.landscape-grid{grid-template-columns:1fr;gap:28px}.audience-copy{font-size:16px}.audience-copy .audience-bridge{font-size:18px}.platform-entry{padding-inline:0}.google-card{padding:28px}.google-card h3{font-size:48px}.google-card .google-statement{font-size:22px}.mission .creator-story{font-size:15px;max-width:420px}.other-platforms{font-size:13px}}
+    .audience-layout{grid-template-columns:.85fr 1fr;align-items:center;gap:88px}.audience-photo{max-width:440px}.audience-photo img{width:100%;height:520px;object-fit:cover;object-position:center;border-radius:28px;box-shadow:var(--shadow)}.audience-photo figcaption{font-size:11px;line-height:1.8;color:var(--muted);margin-top:14px}.audience-photo a{text-decoration:underline;text-underline-offset:3px}.audience-copy h2{margin-bottom:28px}.audience-copy .eyebrow{margin:0 0 16px}.audience-next{display:inline-flex;gap:24px;align-items:center;margin-top:30px;padding-block:12px;border-bottom:1px solid #b6c9e8;color:var(--deep-blue);font-size:15px}.audience-next:hover{gap:32px}.platform-entry .platform-label{font-size:13px;color:var(--deep-blue);margin-bottom:12px}.platform-entry h3{font-size:21px;line-height:1.55;letter-spacing:-.02em}.demo-intro{display:flex;align-items:flex-end;justify-content:space-between;gap:48px;margin-bottom:85px;padding-bottom:45px;border-bottom:1px solid var(--line)}.demo-intro>p{font-size:15px;color:var(--quiet);max-width:380px}.operation-explorer{margin-top:75px;padding:30px 34px;border-radius:24px;background:var(--surface);box-shadow:var(--shadow)}.operation-explorer>summary{list-style:none;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:30px}.operation-explorer strong{display:block;font-size:21px;font-weight:600;line-height:1.6}.operation-explorer small{display:block;margin-top:8px;font-size:14px;color:var(--quiet);line-height:1.8}.explore-button{display:inline-flex;align-items:center;gap:18px;flex:none;color:var(--deep-blue);font-size:15px;padding:15px 20px;border-radius:15px;background:#e9effa;transition:transform .2s}.operation-explorer summary:hover .explore-button{transform:translateY(-2px)}.operation-explorer summary:active .explore-button{transform:scale(.98)}.operation-list{display:grid;grid-template-columns:1fr 1fr;gap:30px 44px;margin-top:32px;padding-top:30px;border-top:1px solid var(--line)}.operation-list h3{font-size:17px;margin-bottom:9px}.operation-list p,.explorer-note{font-size:14px;color:var(--quiet)}.explorer-note{margin-top:30px}.operation-explorer[open] .explore-button>span{transform:rotate(45deg)}
+    @media(max-width:1000px){.audience-layout{gap:42px}.audience-photo img{height:470px}.demo-intro{gap:32px}.operation-explorer{padding:26px}}
+    @media(max-width:760px){.audience-layout{grid-template-columns:1fr;gap:30px}.audience-photo{order:1;max-width:100%}.audience-photo img{height:auto;max-height:490px;aspect-ratio:4/5}.audience-copy{order:0}.demo-intro{display:block;margin-bottom:45px;padding-bottom:30px}.demo-intro>p{margin-top:20px}.operation-explorer{margin-top:45px;padding:24px}.operation-explorer>summary{align-items:flex-start;flex-direction:column;gap:22px}.operation-explorer strong{font-size:19px}.operation-list{grid-template-columns:1fr;gap:24px}.platform-entry h3{font-size:20px}}
+    @media(prefers-reduced-motion:reduce){.operation-explorer summary:hover .explore-button{transform:none}}
+    .contact-trigger{border:0;background:none;padding:0;cursor:pointer;font:inherit;color:inherit}.contact-trigger:hover{color:var(--deep-blue)}
+    .contact-dialog{width:min(420px,calc(100% - 32px));max-width:none;border:1px solid #fff;border-radius:24px;background:var(--surface);box-shadow:0 24px 70px #20324d38;color:var(--ink);padding:30px}.contact-dialog::backdrop{background:#101b2e88}.contact-dialog h2{font-size:25px;line-height:1.35}.contact-dialog>p{font-size:14px;color:var(--quiet);margin-top:10px;line-height:1.75}.contact-row{display:grid;grid-template-columns:44px minmax(0,1fr) auto;align-items:center;gap:12px;min-height:64px;border-bottom:1px solid var(--line)}.contact-row:first-of-type{margin-top:18px}.contact-row span{font-size:14px;color:var(--quiet)}.contact-row strong{font-size:16px;font-weight:600;overflow-wrap:anywhere}.contact-row button,.contact-close{border:0;border-radius:11px;cursor:pointer;font:inherit;min-height:44px}.contact-row button{padding:0 14px;background:#e8eef9;color:var(--deep-blue)}.contact-close{width:100%;margin-top:20px;background:#e9eef5;color:var(--ink)}.contact-row button:hover,.contact-close:hover{filter:brightness(.97)}.contact-row button:active,.contact-close:active{transform:scale(.98)}.contact-status{min-height:20px;margin-top:9px;font-size:12px;color:var(--deep-blue)}
+    .audience-illustration{max-width:none;width:100%}.audience-illustration img{width:100%;height:auto;max-height:none;aspect-ratio:auto;object-fit:contain;border-radius:0;box-shadow:none;background:transparent}
+    .demo-video{display:block;width:100%;height:auto;border-radius:27px;background:#111}
+    .demo-picture{display:none;width:100%}.demo-picture img{display:block;width:100%;height:auto;border-radius:27px}
+    .setting-media{width:100%;max-width:470px;justify-self:center;padding:20px;border-radius:28px}
+    .sensitivity-clip{position:relative;width:100%;aspect-ratio:1080/888;overflow:hidden;border-radius:18px}
+    .sensitivity-clip .demo-video{position:absolute;top:0;left:0;width:100%;height:auto;aspect-ratio:1080/2348;transform:translateY(-31.09%);border-radius:0;background:transparent}
+    .nav .github-link{display:inline-flex;align-items:center;gap:7px;color:var(--quiet);font-weight:400;white-space:nowrap}
+    .nav .github-link:hover{color:var(--deep-blue)}.nav .github-link:active{transform:scale(.98)}.github-mark{width:17px;height:17px;fill:currentColor;flex:none}
+    @media(max-width:760px){.nav>a:not(.github-link){display:none}}
+    .brand .logo{background:#171c25;box-shadow:0 5px 13px #171c2529}
+    .safety-layout{display:grid;grid-template-columns:.85fr 1.15fr;gap:80px;align-items:center}.safety-copy>p{max-width:420px;font-size:17px;color:var(--quiet)}.safety-panel{background:var(--surface);border:1px solid #fff;border-radius:28px;box-shadow:var(--shadow);padding:20px 34px}.safety-item{display:grid;grid-template-columns:110px 1fr;gap:24px;padding:26px 0;align-items:start}.safety-item+.safety-item{border-top:1px solid var(--line)}.safety-time{font-size:24px;line-height:1.3;font-weight:650;color:var(--deep-blue);white-space:nowrap}.safety-item h3{font-size:17px;margin-bottom:6px}.safety-item p{font-size:14px;color:var(--quiet);line-height:1.8}
+    .phone-shell{position:relative}.demo-play{display:none;position:absolute;z-index:3;left:50%;bottom:22px;transform:translateX(-50%);border:0;border-radius:999px;background:#172439ed;color:#fff;padding:10px 17px;white-space:nowrap;font-size:13px;box-shadow:0 5px 18px #101a2b45;cursor:pointer}.demo-play.is-visible{display:block}.demo-play:active{transform:translateX(-50%) scale(.98)}.sensitivity-clip .demo-play{bottom:12px}
+    @media(max-width:760px){.wrap{width:calc(100% - 48px)}.header{height:72px}.hero-body{padding-block:28px 42px;gap:38px}.hero-lockup{margin-bottom:16px}.hero-lockup h1{font-size:38px}.hero-lockup .logo{width:48px;height:48px;border-radius:15px}.hero-tagline{font-size:29px;line-height:1.48}.hero-copy>p{max-width:340px;line-height:1.75;margin:18px auto 24px}.actions{flex-direction:column;align-items:center;gap:12px}.actions .button{width:min(100%,305px)}.hero-caption{margin-top:22px}.section{padding-block:78px}.section-heading{margin-bottom:36px}.context-grid{gap:20px}.context-card{padding:28px}.feature-layout{gap:30px}.feature-copy h2{margin-bottom:16px}.feature-copy>p{line-height:1.85}.safety-layout{grid-template-columns:1fr;gap:28px}.safety-copy>p{font-size:16px}.safety-panel{padding:8px 24px}.safety-item{grid-template-columns:1fr;gap:8px;padding:22px 0}.safety-time{font-size:22px}.safety-item p{font-size:14px}.mission{padding-block:88px}}
+    @media(max-width:360px){.wrap{width:calc(100% - 40px)}.hero-lockup h1{font-size:35px}.hero-tagline{font-size:27px}.safety-panel{padding-inline:20px}}
+    @media(max-width:760px){.demo-video,.demo-play{display:none!important}.demo-picture{display:block}.sensitivity-clip .demo-picture,.sensitivity-clip .demo-picture img{height:100%;border-radius:0}.sensitivity-clip .demo-picture img{object-fit:cover}}
+    .scroll-cue{width:56px;height:64px;margin-inline:auto;gap:0;color:var(--deep-blue)}
+    .scroll-cue .icon{width:20px;height:20px;animation:cue-drift 2.6s ease-in-out infinite}
+    @keyframes cue-drift{0%,100%{transform:translateY(-3px);opacity:.65}50%{transform:translateY(5px);opacity:1}}
+    .demo-intro{display:block;margin-bottom:42px;padding-bottom:28px}
+    .reveal.entered{animation:arrive .62s cubic-bezier(.22,1,.36,1) both}
+    @keyframes arrive{from{opacity:0;transform:translateY(24px)}to{opacity:1;transform:none}}
+    .hero-media.reveal.entered,.feature-layout .feature-media.reveal.entered,.setting-media.reveal.entered,.google-card.reveal.entered{animation-delay:.1s}
+    @media(max-width:760px){.demo-intro{margin-bottom:30px;padding-bottom:24px}}
+    @media(prefers-reduced-motion:reduce){.scroll-cue .icon,.reveal.entered{animation:none!important}}
+  </style>
+</head>
+<body>
+  <svg aria-hidden="true" style="position:absolute;width:0;height:0;overflow:hidden"><defs>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></symbol>
+    <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 4v16m-6-6 6 6 6-6"/></symbol>
+    <symbol id="i-media" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="m10 8 6 4-6 4Z"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M9 3v18M15 3v18M3 9h18M3 15h18"/></symbol>
+    <symbol id="i-tune" viewBox="0 0 24 24"><path d="M3 7h5m5 0h8M3 17h10m5 0h3"/><circle cx="10.5" cy="7" r="2.5"/><circle cx="15.5" cy="17" r="2.5"/></symbol>
+    <symbol id="i-text" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M7 9h10M7 13h6M7 16h8"/></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1.5"/><path d="m3 17 6-5 4 4 3-3 5 5"/></symbol>
+  </defs></svg>
+  <a class="skip" href="#context">跳到项目背景</a>
+  <div class="hero" id="top">
+    <header class="header wrap">
+      <a class="brand" href="#top" aria-label="言出法随，回到页首"><span class="logo"><img src="assets/logo-glyph.png" alt="" width="22" height="19"></span>言出法随</a>
+      <nav class="nav" aria-label="页面导航"><a class="desktop-link" href="#context">项目背景</a><a href="#grid">核心功能</a><a class="desktop-link" href="#mission">我们的愿景</a><a class="github-link" href="https://github.com/qbhugo666/YanChuFaSui" target="_blank" rel="noopener noreferrer" aria-label="访问言出法随 GitHub 项目仓库"><svg class="github-mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.11.79-.25.79-.56v-2.02c-3.22.7-3.9-1.37-3.9-1.37-.52-1.33-1.28-1.68-1.28-1.68-1.05-.72.08-.71.08-.71 1.16.08 1.77 1.19 1.77 1.19 1.03 1.76 2.7 1.25 3.36.95.1-.75.4-1.25.73-1.54-2.57-.29-5.27-1.28-5.27-5.69 0-1.26.45-2.29 1.19-3.1-.12-.3-.52-1.47.11-3.05 0 0 .97-.31 3.16 1.18a10.94 10.94 0 0 1 5.76 0c2.19-1.49 3.16-1.18 3.16-1.18.63 1.58.23 2.75.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.42-2.7 5.39-5.28 5.68.41.35.78 1.03.78 2.08v3.09c0 .31.21.68.79.56A11.5 11.5 0 0 0 12 .5Z"/></svg><span>GitHub</span></a></nav>
+    </header>
+    <main id="main">
+      <!-- A01: Replace the inner media-slot with the user's real numbered-click recording. -->
+      <section class="hero-body wrap" aria-labelledby="hero-title">
+        <div class="hero-copy reveal">
+          <div class="hero-lockup"><span class="logo"><img src="assets/logo-glyph.png" alt="" width="39" height="33"></span><h1 id="hero-title">言出法随</h1></div>
+          <div class="hero-tagline">用中文语音，<br><em>操作手机。</em></div>
+          <p>说出指令，完成点击、滑动与输入。<br>为手部操作受限的人，多一种操作方式。</p>
+          <div class="actions"><a class="button primary" href="https://github.com/qbhugo666/YanChuFaSui/releases/latest/download/VoiceControl-v0.60.0.apk">直接下载 Android 版<svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></a><a class="button" href="#context">了解这个项目</a></div>
+          <div class="hero-caption">中文语音控制 · Android 7.0 及以上</div>
+        </div>
+        <figure class="hero-media reveal" aria-label="A01 首页演示视频">
+          <div class="phone-shell"><picture class="demo-picture"><source srcset="assets/hero-home-demo.webp" type="image/webp" media="(prefers-reduced-motion: no-preference)"><img src="assets/hero-home-demo-poster.jpg" alt="言出法随首页操作演示" width="300" height="652" fetchpriority="high"></picture><video class="demo-video" playsinline preload="none" muted loop data-autoplay aria-label="言出法随首页演示视频" poster="assets/hero-home-demo-poster.jpg"><source src="assets/hero-home-demo.mp4" type="video/mp4">当前浏览器暂不支持播放此视频。</video></div>
+        </figure>
+      </section>
+      <a class="scroll-cue" href="#context" aria-label="查看项目背景"><svg class="icon" aria-hidden="true"><use href="#i-down"/></svg></a>
+      <section class="section audience" id="context" aria-labelledby="audience-title">
+        <div class="wrap audience-layout reveal">
+          <figure class="audience-photo audience-illustration"><img src="assets/accessibility-illustration.png" alt="轮椅使用者面向桌上的电脑与支架手机的插画" loading="lazy"></figure>
+          <div class="audience-copy"><p class="eyebrow">为什么需要言出法随</p><h2 id="audience-title">一次点击，<br>对有些人并不简单。</h2><p>对部分肢体障碍者而言，抬起手臂、伸出手指，或准确触碰屏幕，都可能十分困难。SMA（脊髓性肌萎缩症）、渐冻症等疾病可能影响肢体活动，让点击、滑动和打字变得不再容易。</p><p>手机连接着亲友、学习、工作与外面的世界。能够自主浏览、交流与表达，是具体而重要的日常需求。</p><a class="audience-next" href="#grid">看看声音能完成哪些操作 <span aria-hidden="true">↓</span></a></div>
+        </div>
+      </section>
+      <section class="section context" id="landscape" aria-labelledby="context-title">
+        <div class="wrap">
+          <div class="section-heading reveal"><div><p class="eyebrow">现有方案的背景</p><h2 id="context-title">中文语音操控，<br>仍存在覆盖缺口。</h2></div><p>对依赖语音操作手机的人而言，设备、语言与应用适配，仍是日常使用中的门槛。</p></div>
+          <div class="landscape-grid">
+            <div class="platform-pair">
+              <article class="platform-entry reveal"><p class="platform-label">iOS · 语音控制</p><h3>完善的体系，较高的硬件门槛。</h3><p>iOS 将无障碍深度整合进系统原生设计，搭载成熟完善的中文语音控制，可适配不同身体状况用户需求，但硬件使用成本门槛突出。</p><div class="source"><a href="https://support.apple.com/zh-cn/guide/iphone/iph2c21a3c88/ios" target="_blank" rel="noopener">iOS 官方说明 ↗</a></div></article>
+              <article class="platform-entry reveal"><p class="platform-label">小米 · 语音控制</p><h3>标签之外，仍有难以触达的目标。</h3><p>小米是国内唯一跟进过该方案的厂商，但其实现主要依赖界面标签定位，同时缺少长期更新与维护，现已无法适配如今复杂的应用生态和操作需求。</p></article>
+            </div>
+            <article class="context-card google-card group reveal"><p class="platform-name">Google Voice Access</p><h3>中文<span class="cross" aria-label="不支持">×</span></h3><p class="google-statement">有语音操控，<br><strong>尚无中文支持。</strong></p><p>支持通过语音点击、滚动和输入文字，但尚未支持中文语音指令。对于主要使用中文的用户，语言仍是一道实际的使用门槛。</p><details class="languages"><summary>查看已支持的七种语言</summary><p>英语、西班牙语、德语、意大利语、法语、葡萄牙语、日语。</p></details><div class="source"><a href="https://support.google.com/accessibility/android/answer/6151854?hl=zh-Hans" target="_blank" rel="noopener">Google 官方中文说明 ↗</a></div></article>
+          </div>
+          <p class="other-platforms">荣耀、vivo、OPPO 等厂商的现有方案，仍缺少面向肢体障碍用户、覆盖点击、滑动与输入的完整语音操控能力。</p>
+          <p class="context-end reveal"><strong>言出法随</strong>，为中文 Android 用户提供另一条日常操作路径。</p>
+        </div>
+      </section>
+      <section class="section feature-section grid-feature" id="grid" aria-labelledby="grid-title">
+        <div class="wrap demo-intro reveal"><div><p class="eyebrow">部分功能演示</p><h2>从一次点击开始。</h2></div></div>
+        <div class="wrap feature-layout">
+          <div class="feature-copy reveal"><div class="feature-label"><span class="symbol"><svg class="icon" aria-hidden="true"><use href="#i-grid"/></svg></span>网格定位</div><h2 id="grid-title">逐级定位，<br><em>触达屏幕上的目标。</em></h2><p>显示十二宫格，逐级缩小范围，再轻点或长按目标区域。没有文字的图标，也可以通过位置选择。</p><ol class="steps"><li><span>1</span>显示网格，选择目标所在区域</li><li><span>2</span>继续缩小范围，定位目标</li><li><span>3</span>轻点或长按，完成操作</li></ol><div class="subtle-facts"><span>十二宫格</span><span>逐级定位</span><span>点击后保留网格</span></div></div>
+          <!-- A02: A real grid selection recording, not a generated interface. -->
+          <figure class="feature-media reveal" aria-label="A02 网格定位演示视频"><div class="phone-shell"><picture class="demo-picture"><source srcset="assets/grid-targeting.webp" type="image/webp" media="(prefers-reduced-motion: no-preference)"><img src="assets/grid-targeting-poster.jpg" alt="网格定位操作演示" width="300" height="652" loading="lazy"></picture><video class="demo-video" playsinline preload="none" muted loop data-autoplay aria-label="网格定位演示视频" poster="assets/grid-targeting-poster.jpg"><source src="assets/grid-targeting.mp4" type="video/mp4">当前浏览器暂不支持播放此视频。</video></div></figure>
+        </div>
+      </section>
+      <section class="section feature-section" id="sensitivity" aria-labelledby="sensitivity-title">
+        <div class="wrap feature-layout sensitivity-layout">
+          <div class="feature-copy reveal"><div class="feature-label"><span class="symbol"><svg class="icon" aria-hidden="true"><use href="#i-tune"/></svg></span>灵敏度调节</div><h2 id="sensitivity-title">让识别，<br><em>适应你的声音。</em></h2><p>根据说话音量和使用环境，调整识别灵敏度。在响应与环境干扰之间，找到适合自己的设置。</p><div class="subtle-facts"><span>1–10 档可调</span><span>按个人需要设置</span></div></div>
+          <!-- A03: A cropped screenshot of the actual sensitivity setting. -->
+          <figure class="setting-media reveal" aria-label="A03 灵敏度调节演示视频"><div class="sensitivity-clip"><picture class="demo-picture"><source srcset="assets/sensitivity-demo.webp" type="image/webp" media="(prefers-reduced-motion: no-preference)"><img src="assets/sensitivity-demo-poster.jpg" alt="灵敏度调节操作演示" width="440" height="362" loading="lazy"></picture><video class="demo-video" width="1080" height="2348" playsinline preload="none" muted loop data-autoplay aria-label="灵敏度调节演示视频" poster="assets/sensitivity-demo-poster.jpg"><source src="assets/sensitivity-demo.mp4" type="video/mp4">当前浏览器暂不支持播放此视频。</video></div></figure>
+        </div>
+      </section>
+      <section class="section feature-section" id="input" aria-labelledby="input-title">
+        <div class="wrap">
+          <div class="feature-layout input-layout">
+            <!-- A04: One continuous real dictation and replacement recording. -->
+            <figure class="feature-media reveal" aria-label="A04 语音输入演示视频"><div class="phone-shell"><picture class="demo-picture"><source srcset="assets/voice-input-demo.webp" type="image/webp" media="(prefers-reduced-motion: no-preference)"><img src="assets/voice-input-demo-poster.jpg" alt="语音输入与编辑操作演示" width="300" height="652" loading="lazy"></picture><video class="demo-video" playsinline preload="none" muted loop data-autoplay aria-label="语音输入演示视频" poster="assets/voice-input-demo-poster.jpg"><source src="assets/voice-input-demo.mp4" type="video/mp4">当前浏览器暂不支持播放此视频。</video></div></figure>
+            <div class="feature-copy reveal"><div class="feature-label"><span class="symbol"><svg class="icon" aria-hidden="true"><use href="#i-text"/></svg></span>语音输入与编辑</div><h2 id="input-title">从口述内容，<br><em>到文字表达。</em></h2><p>在输入框中口述内容，再通过语音修改文字，完成聊天、搜索与记录。</p><ol class="steps"><li><span>1</span>进入输入模式</li><li><span>2</span>说出内容，写入输入框</li><li><span>3</span>通过语音替换或删除文字</li></ol></div>
+          </div>
+        </div>
+      </section>
+      <section class="section feature-section" id="safety" aria-labelledby="safety-title">
+        <div class="wrap safety-layout">
+          <div class="feature-copy safety-copy reveal"><p class="eyebrow">会话安全</p><h2 id="safety-title">安全熔断，<br><em>求助通道畅通。</em></h2><p>安卓系统麦克风音频输入具有独占性。言出法随仅在限时会话中聆听：超时自动结束；说“退出”或锁屏立即释放。释放后，系统语音助手可随时接管，紧急时能正常唤醒。</p></div>
+          <div class="safety-panel reveal" aria-label="会话安全机制">
+            <div class="safety-item"><div class="safety-time">5 分钟</div><div><h3>定时结束，可按需继续</h3><p>每段会话到期前 20 秒提醒；在提醒期间说“继续”，可延长一段。</p></div></div>
+            <div class="safety-item"><div class="safety-time">25 分钟</div><div><h3>累计时长上限</h3><p>即使多次延长，单次会话也会在累计 25 分钟时结束并释放麦克风。</p></div></div>
+            <div class="safety-item"><div class="safety-time">8 秒内 6 次</div><div><h3>异常连续操作自动停止</h3><p>若 8 秒内执行了 6 次操作，会自动结束会话，避免误识别造成连续操作。</p></div></div>
+          </div>
+        </div>
+        <div class="wrap">
+          <details class="operation-explorer reveal"><summary><span><strong>还可以用声音，完成更多日常操作。</strong><small>浏览页面、调节音量、打开通知中心与控制中心……</small></span><span class="explore-button">探索更多操作 <span aria-hidden="true">＋</span></span></summary><div class="operation-list"><article><h3>浏览与导航</h3><p>向上、向下、向左、向右滑动；返回、回到桌面、打开最近任务。</p></article><article><h3>系统面板与音量</h3><p>打开通知中心、控制中心；增加或降低音量。</p></article><article><h3>点击与重复</h3><p>编号点击、文字点击、长按目标，以及重复上一个动作。</p></article><article><h3>适应个人习惯</h3><p>绑定自己的指令说法、设置个人词典，导入或导出配置。</p></article></div><p class="explorer-note">开始使用时，可在 App 首页进入「指令」查看具体说法与使用方法。</p></details>
+        </div>
+      </section>
+      <section class="mission" id="mission" aria-labelledby="mission-title"><div class="wrap reveal"><span class="logo"><img src="assets/logo-glyph.png" alt="" width="32" height="27"></span><h2 id="mission-title">让每个人，<br><em>都能平等地连接世界。</em></h2><p class="creator-story">言出法随，源于一位 22 岁 SMA 患者对数字生活自主权的追求。他通过与 AI 协作编程（Vibe Coding），将亲身遇到的操作障碍，一步步转化为可用的功能，也希望让这份探索惠及更多有相同需要的人。</p><div class="mission-sign">言出法随</div></div></section>
+    </main>
+  </div>
+  <footer class="footer wrap">
+    <div class="footer-top"><span>言出法随 · 中文 Android 语音控制</span><div class="footer-links"><button class="contact-trigger" type="button" data-open-contact>反馈与联系 ↗</button><a class="text-link" href="https://github.com/qbhugo666/YanChuFaSui" target="_blank" rel="noopener">开源代码 ↗</a><a class="text-link" href="https://github.com/qbhugo666/YanChuFaSui/releases/latest" target="_blank" rel="noopener">版本记录 ↗</a><a class="text-link" href="#top">返回页首 ↑</a></div></div>
+    <div class="footer-note"><span>识别与操作效果受环境、发音和应用界面影响。</span><span>感谢 Cx330 的早期试用与反馈。</span></div>
+  </footer>
+  <dialog class="contact-dialog" id="contact-dialog" aria-labelledby="contact-title" aria-describedby="contact-description">
+    <h2 id="contact-title">反馈与联系</h2>
+    <p id="contact-description">使用中遇到问题，或有功能建议，欢迎联系作者。</p>
+    <div class="contact-row"><span>微信</span><strong>HXH2003qb</strong><button type="button" data-copy-contact="HXH2003qb" aria-label="复制微信号 HXH2003qb">复制</button></div>
+    <div class="contact-row"><span>QQ</span><strong>252206091</strong><button type="button" data-copy-contact="252206091" aria-label="复制 QQ 号 252206091">复制</button></div>
+    <p class="contact-status" id="contact-status" role="status" aria-live="polite"></p>
+    <button class="contact-close" type="button" data-close-contact>关闭</button>
+  </dialog>
+  <script>
+    const contactDialog = document.getElementById('contact-dialog');
+    const contactStatus = document.getElementById('contact-status');
+    document.querySelectorAll('[data-open-contact]').forEach(button => button.addEventListener('click', () => { contactStatus.textContent = ''; contactDialog.showModal(); }));
+    document.querySelector('[data-close-contact]').addEventListener('click', () => contactDialog.close());
+    contactDialog.addEventListener('click', event => { if (event.target === contactDialog) contactDialog.close(); });
+    document.querySelectorAll('[data-copy-contact]').forEach(button => button.addEventListener('click', async () => {
+      try {
+        if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(button.dataset.copyContact);
+        else {
+          const field = document.createElement('textarea');
+          field.value = button.dataset.copyContact;
+          field.style.position = 'fixed'; field.style.opacity = '0';
+          document.body.appendChild(field); field.select();
+          const copied = document.execCommand('copy'); field.remove();
+          if (!copied) throw new Error('copy unavailable');
+        }
+        contactStatus.textContent = button.dataset.copyContact === 'HXH2003qb' ? '微信号已复制' : 'QQ 号已复制';
+      } catch {
+        contactStatus.textContent = '复制失败，请长按账号手动复制。';
+      }
+    }));
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+    if ('IntersectionObserver' in window && !reduceMotion.matches) {
+      const observer = new IntersectionObserver(entries => {
+        entries.forEach(entry => { if (entry.isIntersecting) entry.target.classList.add('entered'); });
+      }, { threshold: 0.12 });
+      const resetObserver = new IntersectionObserver(entries => {
+        entries.forEach(entry => { if (!entry.isIntersecting) entry.target.classList.remove('entered'); });
+      }, { threshold: 0, rootMargin: '96px 0px' });
+      document.querySelectorAll('.reveal').forEach(element => {
+        observer.observe(element);
+        resetObserver.observe(element);
+      });
+    }
+    const demoVideos = document.querySelectorAll('video[data-autoplay]');
+    const isVisible = video => {
+      const bounds = (video.closest('.sensitivity-clip') || video).getBoundingClientRect();
+      return bounds.top < innerHeight * 0.85 && bounds.bottom > innerHeight * 0.15;
+    };
+    const tryPlay = video => {
+      if (document.hidden || reduceMotion.matches || getComputedStyle(video).display === 'none' || !isVisible(video)) return;
+      if (!video.paused) return;
+      video.muted = true;
+      const result = video.play();
+      if (result && typeof result.catch === 'function') result.catch(() => {
+        if (isVisible(video)) video.nextElementSibling.classList.add('is-visible');
+      });
+    };
+    demoVideos.forEach(video => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'demo-play';
+      button.textContent = '点按播放演示';
+      button.setAttribute('aria-label', `播放${video.getAttribute('aria-label')}`);
+      video.insertAdjacentElement('afterend', button);
+      button.addEventListener('click', () => {
+        video.play().then(() => button.classList.remove('is-visible')).catch(() => {});
+      });
+      video.addEventListener('playing', () => button.classList.remove('is-visible'));
+      video.addEventListener('error', () => button.classList.add('is-visible'));
+      video.addEventListener('canplay', () => tryPlay(video));
+      window.setTimeout(() => { if (video.paused && isVisible(video) && !reduceMotion.matches) button.classList.add('is-visible'); }, 1800);
+      if (reduceMotion.matches) { video.pause(); button.classList.add('is-visible'); }
+    });
+    const playVisibleDemo = video => {
+      if (document.hidden || reduceMotion.matches || getComputedStyle(video).display === 'none' || !isVisible(video)) video.pause();
+      else tryPlay(video);
+    };
+    if ('IntersectionObserver' in window && !reduceMotion.matches) {
+      const videoObserver = new IntersectionObserver(entries => entries.forEach(entry => {
+        const video = entry.target.matches('video') ? entry.target : entry.target.querySelector('video');
+        if (entry.isIntersecting && !document.hidden) tryPlay(video);
+        else video.pause();
+      }), { threshold: 0, rootMargin: '-15% 0px -15% 0px' });
+      demoVideos.forEach(video => videoObserver.observe(video.closest('.sensitivity-clip') || video));
+    } else if (!reduceMotion.matches) demoVideos.forEach(tryPlay);
+    document.addEventListener('visibilitychange', () => demoVideos.forEach(playVisibleDemo));
+    window.addEventListener('resize', () => demoVideos.forEach(playVisibleDemo));
+    document.addEventListener('WeixinJSBridgeReady', () => demoVideos.forEach(tryPlay), false);
+    window.addEventListener('pageshow', () => demoVideos.forEach(playVisibleDemo));
+  </script>
+</body>
+</html>

@@ -4,8 +4,10 @@ import android.app.Activity
 import android.app.Dialog
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.Intent
 import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
+import android.net.Uri
 import android.view.View
 import android.view.Window
 import android.view.WindowManager
@@ -15,6 +17,7 @@ import android.widget.Toast
 object ContactDialog {
     private const val WECHAT_ID = "HXH2003qb"
     private const val QQ_ID = "252206091"
+    private const val GITHUB_URL = "https://github.com/qbhugo666/YanChuFaSui"
 
     fun show(activity: Activity) {
         val dialog = Dialog(activity)
@@ -31,6 +34,10 @@ object ContactDialog {
 
         dialog.findViewById<View>(R.id.btn_copy_wechat).setOnClickListener { copy("微信号", WECHAT_ID) }
         dialog.findViewById<View>(R.id.btn_copy_qq).setOnClickListener { copy("QQ 号", QQ_ID) }
+        dialog.findViewById<View>(R.id.btn_open_github).setOnClickListener {
+            runCatching { activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(GITHUB_URL))) }
+                .onFailure { Toast.makeText(activity, "未找到可打开网页的应用", Toast.LENGTH_SHORT).show() }
+        }
         dialog.findViewById<View>(R.id.btn_contact_done).setOnClickListener { dialog.dismiss() }
 
         dialog.show()
