@@ -1459,12 +1459,57 @@ open class VoiceControlService : AccessibilityService() {
         runCatching { collectClickable(root, clickable) }
         val texts = mutableListOf<AccessibilityNodeInfo>()
         runCatching { collectTextLeaf(root, texts) }
+        val screen = realScreenRect()
+        fun hasScrollableAncestor(node: AccessibilityNodeInfo): Boolean {
+            var parent = node.parent
+            var depth = 0
+            while (parent != null && depth++ < MAX_TREE_DEPTH) {
+                if (parent.isScrollable) return true
+                parent = parent.parent
+            }
+            return false
+        }
+        fun isInsideCollapsibleAppBar(node: AccessibilityNodeInfo): Boolean {
+            var parent = node.parent
+            var depth = 0
+            while (parent != null && depth++ < MAX_TREE_DEPTH) {
+                val id = parent.viewIdResourceName?.lowercase().orEmpty()
+                val type = parent.className?.toString()?.lowercase().orEmpty()
+                if (id.contains("appbar") || id.contains("app_bar") ||
+                    type.contains("appbarlayout")) return true
+                parent = parent.parent
+            }
+            return false
+        }
+        // 顶部固定按钮/标签的下边界，是被折叠滚动内容的遮挡线。知乎等页面在头部
+        // 完全缩起后仍给旧节点返回 visible=true 和屏内 bounds，单凭 visible/中心无法排除。
+        val topBarBottom = clickable.asSequence().filter { !hasScrollableAncestor(it) }
+            .map { c -> val r = Rect(); c.getBoundsInScreen(r); c to r }
+            .filter { (c, r) ->
+                c.isVisibleToUser && r.top >= 0 && r.top < screen.bottom * 0.12f &&
+                    r.bottom <= screen.bottom * 0.18f && r.height() <= screen.bottom * 0.1f &&
+                    r.width() <= screen.right * 0.45f
+            }.maxOfOrNull { it.second.bottom.toFloat() } ?: 0f
+        fun onScreen(node: AccessibilityNodeInfo, rect: Rect): Boolean =
+            NumberBadgeLayout.isTargetOnScreen(
+                NumberBadgeLayout.Bounds(rect.left.toFloat(), rect.top.toFloat(),
+                    rect.right.toFloat(), rect.bottom.toFloat()), screen.right, screen.bottom) &&
+                !NumberBadgeLayout.isHiddenBehindTopBar(
+                    NumberBadgeLayout.Bounds(rect.left.toFloat(), rect.top.toFloat(),
+                        rect.right.toFloat(), rect.bottom.toFloat()),
+                    topBarBottom, hasScrollableAncestor(node) && isInsideCollapsibleAppBar(node))
+        // 有些 App 滚动后仍把离屏节点留在无障碍树里；不能让它们占编号或挤到顶边。
+        clickable.removeAll { c ->
+            val r = Rect(); c.getBoundsInScreen(r)
+            !onScreen(c, r)
+        }
         val clickRects = clickable.map { c ->
             val r = Rect(); c.getBoundsInScreen(r); r
         }
         val seen = mutableSetOf<String>()
         texts.forEach { t ->
             val r = Rect(); t.getBoundsInScreen(r)
+            if (!onScreen(t, r)) return@forEach
             if (r.width() < dp(24) || r.height() < dp(24)) return@forEach
             if (clickRects.any { it.contains(r) }) return@forEach
             val key = "${r.left},${r.top},${r.right},${r.bottom}"
@@ -2203,16 +2248,21 @@ open class VoiceControlService : AccessibilityService() {
             // 黑底白字、小号圆角正方形标签，统一大小（v0.8 原始几何：20dp 方块 5dp 圆角）
             val size = 20f * density
             val corner = 5f * density
-            for ((idx, r) in items.withIndex()) {
-                // v0.55 徽章挂元素左上角（对齐小米原生编号样式，用户拍板）；
-                // v0.55 微调：纯角落锚点在整行元素上会贴屏幕边缘显得「太偏」，
-                // 向中心回移 18%——整行列表刚好落在头像左上角附近。点击仍走元素中心不受影响
-                var cx = (r.left + (r.exactCenterX() - r.left) * 0.18f - offX).toFloat()
-                var cy = (r.top + (r.exactCenterY() - r.top) * 0.18f - offY).toFloat()
-                // 屏幕边缘防出界：徽章必须完整留在屏内
+            val targets = items.map { r ->
+                NumberBadgeLayout.Bounds(
+                    (r.left - offX).toFloat(), (r.top - offY).toFloat(),
+                    (r.right - offX).toFloat(), (r.bottom - offY).toFloat()
+                )
+            }
+            val positions = NumberBadgeLayout.place(targets, width, height,
+                size, 2f * resources.displayMetrics.density)
+            for (idx in items.indices) {
+                // 徽章优先留在目标内；多个目标锚点接近时让位给最近空槽。
+                // items 与 positions 一一对应，编号点击仍使用原始 items/labelRects 的中心。
+                val position = positions[idx] ?: continue
+                val cx = position.x
+                val cy = position.y
                 val half = size / 2f
-                cx = cx.coerceIn(half, width - half)
-                cy = cy.coerceIn(half, height - half)
                 val left = cx - half
                 val top = cy - half
                 canvas.drawRoundRect(left, top, left + size, top + size, corner, corner, bgPaint)
