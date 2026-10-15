@@ -36,31 +36,31 @@
 
 ## 看看声音能做什么
 
-下面是已有的功能演示，部分界面来自早期版本。
+以下演示与[项目介绍页](https://yanchufasui.pages.dev/)使用相同的录屏素材。
 
 <table>
   <tr>
     <td align="center" width="50%">
-      <h3>说出编号，点击目标</h3>
-      <p>「显示编号」→「点击十八」</p>
-      <img src="docs/images/demo-numbers.gif" width="265" alt="语音显示屏幕编号，再点击对应目标的演示" />
+      <h3>用声音操作手机</h3>
+      <p>从手机上的日常操作开始</p>
+      <img src="website/publish-ready/assets/hero-home-demo.webp" width="265" alt="项目介绍页中的手机语音操作演示" />
     </td>
     <td align="center" width="50%">
-      <h3>说出方向，继续浏览</h3>
-      <p>「向上滑动」</p>
-      <img src="docs/images/demo-swipe.gif" width="265" alt="使用语音滑动手机页面的演示" />
+      <h3>网格定位，逐步点准</h3>
+      <p>「显示网格」→ 逐级定位 →「轻点」</p>
+      <img src="website/publish-ready/assets/grid-targeting.webp" width="265" alt="使用网格逐步缩小范围并定位目标的演示" />
     </td>
   </tr>
   <tr>
     <td align="center">
       <h3>说一句，把文字写进去</h3>
       <p>进入输入框 →「输入」→ 说出内容</p>
-      <img src="docs/images/demo-dictation.gif" width="265" alt="使用语音听写向输入框写入文字的演示" />
+      <img src="website/publish-ready/assets/voice-input-demo.webp" width="265" alt="项目介绍页中的语音输入演示" />
     </td>
     <td align="center">
-      <h3>写错的字，也能用嘴改</h3>
-      <p>「把不错替换成很好」</p>
-      <img src="docs/images/demo-replace.gif" width="265" alt="使用语音替换输入框内文字的演示" />
+      <h3>调节灵敏度，适应自己的声音</h3>
+      <p>按说话音量与使用环境调整识别灵敏度</p>
+      <img src="website/publish-ready/assets/sensitivity-demo.webp" width="265" alt="识别灵敏度设置的演示，按实际内容比例显示" />
     </td>
   </tr>
 </table>
@@ -113,9 +113,9 @@
 
 ## 开始使用
 
-**当前正式版：0.58.3 · 安装包约 293 MB · Android 7.0+ · ARM64 / ARMv7**
+**当前正式版：0.59.2 · 安装包约 293 MB · Android 7.0+ · ARM64 / ARMv7**
 
-1. 从 **[正式版下载页](https://github.com/qbhugo666/YanChuFaSui/releases/latest)** 下载 APK 并安装。
+1. **[直接下载 v0.59.2 APK](https://github.com/qbhugo666/YanChuFaSui/releases/download/v0.59.2/VoiceControl-v0.59.2.apk)** 并安装，或前往 **[正式版下载页](https://github.com/qbhugo666/YanChuFaSui/releases/latest)** 查看版本说明。
 2. 打开 App，按照引导授予麦克风权限并开启无障碍服务。
 3. 按机型提示设置电池优化豁免、自启动等后台权限。
 4. 点击「开始控制」，先试一句「显示编号」。
@@ -168,7 +168,7 @@ flowchart LR
     E --> F["点击 · 滑动 · 输入 · 系统操作"]
 ```
 
-当前 0.58.3 使用普通离线识别与文字判断流程，实验性声音二审已移除。命令执行结果与使用记录相关联；部分入口能观察页面变化，但派发成功不等于页面业务操作一定完成，也不会自动补点。
+当前 0.59.2 使用普通离线识别与文字判断流程，实验性声音二审已移除。命令执行结果与使用记录相关联；部分入口能观察页面变化，但派发成功不等于页面业务操作一定完成，也不会自动补点。
 
 ### 从源码构建
 

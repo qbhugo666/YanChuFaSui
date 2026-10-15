@@ -37,31 +37,31 @@ It uses Android accessibility services to act on the interface you are already u
 
 ## See what your voice can do
 
-These are existing feature demonstrations. Some interfaces are from earlier versions.
+These demonstrations use the same recordings as the [project introduction page](https://yanchufasui.pages.dev/).
 
 <table>
   <tr>
     <td align="center" width="50%">
-      <h3>Select a target by number</h3>
-      <p>「显示编号」→「点击十八」</p>
-      <img src="docs/images/demo-numbers.gif" width="265" alt="Show numbered targets and select one by voice" />
+      <h3>Use your phone by voice</h3>
+      <p>Start with everyday phone interactions</p>
+      <img src="website/publish-ready/assets/hero-home-demo.webp" width="265" alt="Phone voice-control demonstration from the project introduction page" />
     </td>
     <td align="center" width="50%">
-      <h3>Keep browsing</h3>
-      <p>「向上滑动」 — swipe up</p>
-      <img src="docs/images/demo-swipe.gif" width="265" alt="Scroll a phone interface by voice" />
+      <h3>Locate a target with the grid</h3>
+      <p>「显示网格」 → narrow the area →「轻点」</p>
+      <img src="website/publish-ready/assets/grid-targeting.webp" width="265" alt="Narrow down a target area with the voice-controlled grid" />
     </td>
   </tr>
   <tr>
     <td align="center">
       <h3>Speak text into a field</h3>
       <p>Open a text field →「输入」→ speak</p>
-      <img src="docs/images/demo-dictation.gif" width="265" alt="Dictate text into an input field" />
+      <img src="website/publish-ready/assets/voice-input-demo.webp" width="265" alt="Voice-input demonstration from the project introduction page" />
     </td>
     <td align="center">
-      <h3>Correct words by speaking</h3>
-      <p>「把不错替换成很好」</p>
-      <img src="docs/images/demo-replace.gif" width="265" alt="Replace words in a text field by voice" />
+      <h3>Adjust recognition sensitivity</h3>
+      <p>Adjust for your voice and surroundings</p>
+      <img src="website/publish-ready/assets/sensitivity-demo.webp" width="265" alt="Recognition sensitivity settings shown at their original content aspect ratio" />
     </td>
   </tr>
 </table>
@@ -114,9 +114,9 @@ Text tapping targets the **current interface**. Dictation needs a usable text fi
 
 ## Get started
 
-**Current release: 0.58.3 · APK about 293 MB · Android 7.0+ · ARM64 / ARMv7**
+**Current release: 0.59.2 · APK about 293 MB · Android 7.0+ · ARM64 / ARMv7**
 
-1. Download and install the APK from **[Releases](https://github.com/qbhugo666/YanChuFaSui/releases/latest)**.
+1. **[Download the v0.59.2 APK](https://github.com/qbhugo666/YanChuFaSui/releases/download/v0.59.2/VoiceControl-v0.59.2.apk)** and install it, or visit **[Releases](https://github.com/qbhugo666/YanChuFaSui/releases/latest)** for release notes.
 2. Follow the app's instructions to grant microphone permission and enable its accessibility service.
 3. Configure battery optimization and background-start permissions as required by your phone.
 4. Start voice control and try 「显示编号」.
@@ -169,7 +169,7 @@ flowchart LR
     E --> F["Taps · Swipes · Text · System actions"]
 ```
 
-Version 0.58.3 uses the ordinary offline recognition and text-routing path. Experimental acoustic review has been removed. Execution records are associated with the initiating utterance; some actions can observe interface changes, but dispatch is not proof of application-level completion. Taps are not automatically retried.
+Version 0.59.2 uses the ordinary offline recognition and text-routing path. Experimental acoustic review has been removed. Execution records are associated with the initiating utterance; some actions can observe interface changes, but dispatch is not proof of application-level completion. Taps are not automatically retried.
 
 ### Build from source
 
