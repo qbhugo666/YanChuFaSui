@@ -91,14 +91,19 @@ class VocabActivity : ThemedActivity() {
         val input = dialog.findViewById<EditText>(R.id.et_vocab_word)!!
         input.setText(preFill)
         val hint = dialog.findViewById<TextView>(R.id.tv_vocab_hint)!!
+        // 2026-10-23：词表在本次弹窗内固定，首次需要撞词检查时加载一次。
+        // 每次输入仍执行相同校验，并重新读取已有个人词；不跨弹窗保留缓存。
+        val matcher by lazy(LazyThreadSafetyMode.NONE) {
+            val json = assets.open("commands.json").bufferedReader(Charsets.UTF_8).use { it.readText() }
+            CommandMatcher.fromJson(json)
+        }
         fun refreshHint() {
             val err = CustomVocab.validateWord(
                 input.text.toString(),
                 CustomVocab.all(this),
             ) { word ->
                 // 指令撞车检查：与指令词/别名发音相近的词不准进名单（防抢指令）
-                val matcherJson = assets.open("commands.json").bufferedReader(Charsets.UTF_8).use { it.readText() }
-                CommandMatcher.fromJson(matcherJson).commandCollision(word)?.let { cmd ->
+                matcher.commandCollision(word)?.let { cmd ->
                     "与指令「$cmd」发音相近，会影响控制，请更换"
                 }
             }

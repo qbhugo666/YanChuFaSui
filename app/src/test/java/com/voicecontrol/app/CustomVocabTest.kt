@@ -11,6 +11,30 @@ import org.junit.Test
  */
 class CustomVocabTest {
 
+    @Test fun `复用生产匹配器不改变连续编辑的撞词结果`() {
+        val json = listOf(java.io.File("src/main/assets/commands.json"), java.io.File("app/src/main/assets/commands.json"))
+            .first { it.isFile }.readText(Charsets.UTF_8)
+        val reused = CommandMatcher.fromJson(json)
+        val edits = listOf("", "黄", "黄信豪", "向上滑动", "话动", "黄信豪", "退出", "继续", "康复中心", "abc123")
+        for (word in edits + edits.reversed()) {
+            val fresh = CommandMatcher.fromJson(json)
+            assertEquals(fresh.commandCollision(word), reused.commandCollision(word))
+        }
+        assertNotNull(reused.commandCollision("向上滑动"))
+        assertNull(reused.commandCollision("黄信豪"))
+    }
+
+    @Test fun `匹配器复用时仍按最新个人词列表检查重复和上限`() {
+        val reused = CommandMatcher.fromJson(TEST_JSON)
+        fun check(existing: List<String>) = CustomVocab.validateWord("黄信豪", existing) {
+            reused.commandCollision(it)?.let { command -> "与指令「$command」发音相近" }
+        }
+        assertNull(check(emptyList()))
+        assertNotNull(check(listOf("黄信豪")))
+        assertNotNull(check(List(CustomVocab.MAX_WORDS) { "已有词$it" }))
+        assertNull(check(emptyList()))
+    }
+
     private fun validate(word: String, existing: List<String> = emptyList()) =
         CustomVocab.validateWord(word, existing) { word ->
             // 模拟撞车检查：与「滑动」发音相近即拒绝（真实实现用 CommandMatcher.commandCollision）
