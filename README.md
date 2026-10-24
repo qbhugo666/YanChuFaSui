@@ -2,11 +2,11 @@
 
 <img src="website/assets/tile-logo.png" width="88" alt="言出法随图标" />
 
-# 言出法随 · YanChuFaSui
+# 言出法随 · Android 离线中文语音控制
 
 ### 把点击、滑动、打字，交给声音。
 
-一个把**中文语音变成手机操作**的 Android 开源工具。<br>
+言出法随是一款 **Android 离线中文语音控制**开源工具，把语音指令变成手机上的点击、滑动与输入。<br>
 为手部操作不便的人，也为希望减少触摸操作的人，提供另一种使用手机的方式。
 
 [![Release](https://img.shields.io/github/v/release/qbhugo666/YanChuFaSui?style=flat-square&color=246BFE)](https://github.com/qbhugo666/YanChuFaSui/releases/latest)
@@ -113,9 +113,11 @@
 
 ## 开始使用
 
-**当前正式版：0.59.2 · 安装包约 293 MB · Android 7.0+ · ARM64 / ARMv7**
+**当前正式版：0.59.3 · 安装包约 293 MB · Android 7.0+ · ARM64 / ARMv7**
 
-1. **[直接下载 v0.59.2 APK](https://github.com/qbhugo666/YanChuFaSui/releases/download/v0.59.2/VoiceControl-v0.59.2.apk)** 并安装，或前往 **[正式版下载页](https://github.com/qbhugo666/YanChuFaSui/releases/latest)** 查看版本说明。
+**v0.59.3 更新**：减少个人词典校验和使用记录的重复工作，反馈导出移至后台，并移除摇移时的胶囊弹动与主线程等待。
+
+1. **[直接下载 v0.59.3 APK](https://github.com/qbhugo666/YanChuFaSui/releases/download/v0.59.3/VoiceControl-v0.59.3.apk)** 并安装，或前往 **[正式版下载页](https://github.com/qbhugo666/YanChuFaSui/releases/latest)** 查看版本说明。
 2. 打开 App，按照引导授予麦克风权限并开启无障碍服务。
 3. 按机型提示设置电池优化豁免、自启动等后台权限。
 4. 点击「开始控制」，先试一句「显示编号」。
@@ -168,7 +170,7 @@ flowchart LR
     E --> F["点击 · 滑动 · 输入 · 系统操作"]
 ```
 
-当前 0.59.2 使用普通离线识别与文字判断流程，实验性声音二审已移除。命令执行结果与使用记录相关联；部分入口能观察页面变化，但派发成功不等于页面业务操作一定完成，也不会自动补点。
+当前代码使用普通离线识别与文字判断流程，实验性声音二审已移除。命令执行结果与使用记录相关联；部分入口能观察页面变化，但派发成功不等于页面业务操作一定完成，也不会自动补点。
 
 ### 从源码构建
 
@@ -201,5 +203,7 @@ Debug APK 位于 `app/build/outputs/apk/debug/app-debug.apk`。正式构建使�
 ## 致谢与许可
 
 感谢 [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)、[SenseVoice](https://github.com/FunAudioLLM/SenseVoice)、[Silero VAD](https://github.com/snakers4/silero-vad) 和 [pinyin4j](https://github.com/belerweb/pinyin4j)，为离线识别和中文匹配提供基础。
+
+感谢 Cx330 的早期试用与反馈。
 
 [Apache-2.0](LICENSE) © 2026 黄信豪 (Hugo)

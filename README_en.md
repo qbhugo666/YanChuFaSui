@@ -114,9 +114,11 @@ Text tapping targets the **current interface**. Dictation needs a usable text fi
 
 ## Get started
 
-**Current release: 0.59.2 · APK about 293 MB · Android 7.0+ · ARM64 / ARMv7**
+**Current release: 0.59.3 · APK about 293 MB · Android 7.0+ · ARM64 / ARMv7**
 
-1. **[Download the v0.59.2 APK](https://github.com/qbhugo666/YanChuFaSui/releases/download/v0.59.2/VoiceControl-v0.59.2.apk)** and install it, or visit **[Releases](https://github.com/qbhugo666/YanChuFaSui/releases/latest)** for release notes.
+**New in v0.59.3:** reduced repeated vocabulary validation and log writes, background feedback collection, and removal of the nudge capsule animation and main-thread wait.
+
+1. **[Download the v0.59.3 APK](https://github.com/qbhugo666/YanChuFaSui/releases/download/v0.59.3/VoiceControl-v0.59.3.apk)** and install it, or visit **[Releases](https://github.com/qbhugo666/YanChuFaSui/releases/latest)** for release notes.
 2. Follow the app's instructions to grant microphone permission and enable its accessibility service.
 3. Configure battery optimization and background-start permissions as required by your phone.
 4. Start voice control and try 「显示编号」.
@@ -169,7 +171,7 @@ flowchart LR
     E --> F["Taps · Swipes · Text · System actions"]
 ```
 
-Version 0.59.2 uses the ordinary offline recognition and text-routing path. Experimental acoustic review has been removed. Execution records are associated with the initiating utterance; some actions can observe interface changes, but dispatch is not proof of application-level completion. Taps are not automatically retried.
+The current code uses the ordinary offline recognition and text-routing path. Experimental acoustic review has been removed. Execution records are associated with the initiating utterance; some actions can observe interface changes, but dispatch is not proof of application-level completion. Taps are not automatically retried.
 
 ### Build from source
 
@@ -202,5 +204,7 @@ The Debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`. Release
 ## Credits and license
 
 Built with [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx), [SenseVoice](https://github.com/FunAudioLLM/SenseVoice), [Silero VAD](https://github.com/snakers4/silero-vad) and [pinyin4j](https://github.com/belerweb/pinyin4j).
+
+Thanks to Cx330 for early testing and feedback.
 
 [Apache-2.0](LICENSE) © 2026 黄信豪 (Hugo)

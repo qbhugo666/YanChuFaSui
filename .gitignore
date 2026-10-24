@@ -13,6 +13,7 @@ keystore.properties
 
 # 归档与临时产物（发布 APK 走 releases/ 目录，不入库）
 releases/
+/_output/
 _test/matrix/
 *.apk
 *.log
