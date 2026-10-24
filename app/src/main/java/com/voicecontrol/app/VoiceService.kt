@@ -1396,31 +1396,33 @@ class VoiceService : Service() {
                 auditCapture ?: SpeechAudit.Capture(source = "synthetic_injection"), decision,
                 speechAssetFingerprint, SystemClock.elapsedRealtime())
         }.getOrNull()
-        try { handleRecognized(text, utteranceId) } finally {
-            if (decision != null) {
-                val disposition = currentDecisionDisposition ?: "本句未采纳声音改判或救回"
-                val label = currentDecisionLabel ?: "未参与"
-                // 全局lastMatch可能还是上一句话；账目只取本句，不能拿旧✅充当新句结果。
-                val ownResult = if (utteranceId.isNotBlank()) UsageLog.all().lastOrNull { it.uid == utteranceId }?.text
-                    else SessionState.lastMatch
-                val finalResult = ownResult?.takeIf { it.isNotBlank() } ?: "本句未记录动作结果"
-                UsageLog.attachAudioDecision(
-                    utteranceId, text, label,
-                    "音量判决=${decision.decision ?: "回退:${decision.fallbackReason ?: "未判定"}"}; " +
-                        "置信度=${decision.confidence?.let { "%.3f".format(java.util.Locale.US, it) } ?: "无"}; " +
-                        "耗时=${decision.latencyMs}ms(encoder=${decision.encoderMs}ms, head=${decision.headMs}ms); " +
-                        "M6候选=${decision.m6Top}; 数字候选=${decision.numTop}; 分段数字候选=${decision.numSegmentTop}; 分段头=${decision.numSegmentHeadUs}us; 4/10候选=${decision.numPairTop}; 4/10头=${decision.numPairHeadUs}us; 光标候选=${decision.cursorTop}; 光标头=${decision.cursorHeadUs}us; " +
-                        "$disposition; 结果=$finalResult"
-                )
+        UsageLog.batchUpdates {
+            try { handleRecognized(text, utteranceId) } finally {
+                if (decision != null) {
+                    val disposition = currentDecisionDisposition ?: "本句未采纳声音改判或救回"
+                    val label = currentDecisionLabel ?: "未参与"
+                    // 全局lastMatch可能还是上一句话；账目只取本句，不能拿旧✅充当新句结果。
+                    val ownResult = if (utteranceId.isNotBlank()) UsageLog.all().lastOrNull { it.uid == utteranceId }?.text
+                        else SessionState.lastMatch
+                    val finalResult = ownResult?.takeIf { it.isNotBlank() } ?: "本句未记录动作结果"
+                    UsageLog.attachAudioDecision(
+                        utteranceId, text, label,
+                        "音量判决=${decision.decision ?: "回退:${decision.fallbackReason ?: "未判定"}"}; " +
+                            "置信度=${decision.confidence?.let { "%.3f".format(java.util.Locale.US, it) } ?: "无"}; " +
+                            "耗时=${decision.latencyMs}ms(encoder=${decision.encoderMs}ms, head=${decision.headMs}ms); " +
+                            "M6候选=${decision.m6Top}; 数字候选=${decision.numTop}; 分段数字候选=${decision.numSegmentTop}; 分段头=${decision.numSegmentHeadUs}us; 4/10候选=${decision.numPairTop}; 4/10头=${decision.numPairHeadUs}us; 光标候选=${decision.cursorTop}; 光标头=${decision.cursorHeadUs}us; " +
+                            "$disposition; 结果=$finalResult"
+                    )
+                }
+                runCatching {
+                    currentSpeechAudit?.let { UsageLog.attachSpeechAudit(utteranceId, it.json(currentDecisionDisposition)) }
+                }.onFailure { Log.w(TAG, "本句诊断记录失败，不影响识别", it) }
+                currentSpeechAudit = null
+                currentAudioDecision = null
+                currentNumberRequest = null
+                currentDecisionDisposition = null
+                currentDecisionLabel = null
             }
-            runCatching {
-                currentSpeechAudit?.let { UsageLog.attachSpeechAudit(utteranceId, it.json(currentDecisionDisposition)) }
-            }.onFailure { Log.w(TAG, "本句诊断记录失败，不影响识别", it) }
-            currentSpeechAudit = null
-            currentAudioDecision = null
-            currentNumberRequest = null
-            currentDecisionDisposition = null
-            currentDecisionLabel = null
         }
         // 2026-10-03：单句反馈留在胶囊/记录，不再推进主页完成态或安排1.2秒回切。
     }
@@ -2441,6 +2443,7 @@ class VoiceService : Service() {
             val durText = if (durSec >= 60) "${durSec / 60} 分 ${durSec % 60} 秒" else "$durSec 秒"
             Log.i(TAG, "SESSION_END reason=$reason dur=${durSec}s ext=$extensionCount/$MAX_EXTENSIONS")
             SessionState.lastMatch = "→ 会话结束：$reason（本次 $durText · 延期 $extensionCount/$MAX_EXTENSIONS 次）"
+            UsageLog.flushPending() // 先保存结束原因，再清会话标记；退出不依赖后台写入。
             sessionStartElapsed = 0L
             getSharedPreferences("app", MODE_PRIVATE).edit().remove(KEY_SESSION_ACTIVE_SINCE).apply()
         } else {

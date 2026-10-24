@@ -46,6 +46,33 @@ object UsageLog {
     private val entries = mutableListOf<Entry>()
     private var file: File? = null
     private val fmt = SimpleDateFormat("HH:mm", Locale.CHINA)
+    private val writeBatchDepth = ThreadLocal<Int>()
+    private var writePending = false
+    private var writeText: (File, String) -> Unit = { target, json -> target.writeText(json) }
+
+    /** 2026-10-23：只合并同一调用内的结果/诊断，不跨句排队、不定时攒写。
+     * 原文、清空、异步结果仍立即保存；异常也在 finally 保存已有更新。
+     * 批次属于调用线程，执行动作时不持有日志锁，其他线程仍可读取/清空。
+     */
+    internal fun <T> batchUpdates(block: () -> T): T {
+        val previousDepth = writeBatchDepth.get() ?: 0
+        writeBatchDepth.set(previousDepth + 1)
+        try {
+            return block()
+        } finally {
+            if (previousDepth == 0) {
+                writeBatchDepth.remove()
+                flushPending()
+            } else {
+                writeBatchDepth.set(previousDepth)
+            }
+        }
+    }
+
+    /** 同步检查点：会话结束原因必须在清除会话标记之前保存。 */
+    @Synchronized internal fun flushPending() {
+        if (writePending) persist(immediate = true)
+    }
 
     /** 幂等初始化（VoiceService/MainActivity onCreate 各调一次）；加载历史记录并清理超期项。
      *  兼容三种持久化格式：新对象 {"t","h","x"}、旧对象 {"t","x"}、数组 [[t,x],...]，
@@ -58,8 +85,14 @@ object UsageLog {
 
     /** JVM 单测专用（2026-09-29 收尾项5）：注入持久化文件并立即加载——同文两次 uid 关联、
      *  旧 JSON 兼容等回归不依赖 Android Context；生产代码勿用 */
-    @Synchronized fun initForTest(f: File) {
+    @Synchronized fun initForTest(
+        f: File,
+        writer: (File, String) -> Unit = { target, json -> target.writeText(json) },
+    ) {
         file = f
+        writeText = writer
+        writePending = false
+        writeBatchDepth.remove()
         entries.clear()
         loadLocked()
     }
@@ -98,7 +131,7 @@ object UsageLog {
         prune()
         entries.add(Entry(System.currentTimeMillis(), "", text.trim(), "", uid))
         while (entries.size > MAX_ENTRIES) entries.removeAt(0)
-        persist()
+        persist(immediate = true) // 执行动作前先留住原文，即使随后异常也有现场。
     }
 
     @Synchronized fun append(text: String) {
@@ -144,13 +177,13 @@ object UsageLog {
             val idx = entries.indexOfLast { it.uid == uid }
             if (idx >= 0) {
                 entries[idx] = entries[idx].copy(text = text)
-                persist()
+                persist(immediate = true)
                 return
             }
         }
         entries.add(Entry(System.currentTimeMillis(), text))
         while (entries.size > MAX_ENTRIES) entries.removeAt(0)
-        persist()
+        persist(immediate = true)
     }
 
     @Synchronized fun all(): List<Entry> = entries.toList()
@@ -189,7 +222,7 @@ object UsageLog {
 
     @Synchronized fun clear() {
         entries.clear()
-        persist()
+        persist(immediate = true)
     }
 
     /** 清除超过保留期（48 小时）的记录 */
@@ -198,7 +231,9 @@ object UsageLog {
         entries.removeAll { it.time < cutoff }
     }
 
-    @Synchronized private fun persist() {
+    @Synchronized private fun persist(immediate: Boolean = false) {
+        writePending = true
+        if (!immediate && (writeBatchDepth.get() ?: 0) > 0) return
         val f = file ?: return
         runCatching {
             val arr = JSONArray()
@@ -209,7 +244,9 @@ object UsageLog {
                     .put("s", e.speechAudit.takeIf { it.isNotBlank() } ?: JSONObject.NULL)
                     .put("f", e.confirmedIntent).put("o", e.observedEffect))
             }
-            f.writeText(arr.toString())
+            // 始终在锁内保存当前列表，不持有旧快照；清空后不会被批次结束写回旧内容。
+            writeText(f, arr.toString())
+            writePending = false
         }
     }
 }
