@@ -1,28 +1,43 @@
 package com.voicecontrol.app
 
-import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
 import android.graphics.Typeface
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.View
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import java.lang.ref.WeakReference
+import java.util.concurrent.Executor
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 
 /**
  * 使用记录页（v0.31.0）：显示最近执行的命令（时间+结果文本）。
  * 数据来自 UsageLog（SessionState.lastMatch 中央挂钩），零新依赖，代码动态生成行。
  */
 class UsageActivity : ThemedActivity() {
+    private val exportWorker = ThreadPoolExecutor(0, 1, 10, TimeUnit.SECONDS, LinkedBlockingQueue()) { work ->
+        Thread(work, "feedback-export")
+    }
+    private val exportTask = FeedbackExportTask<FeedbackReport>(
+        exportWorker,
+        Executor { Handler(Looper.getMainLooper()).post(it) },
+        FeedbackFiles::discard,
+    )
+    private lateinit var reportBuilder: FeedbackReportBuilder
+    private var pageStarted = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         UsageLog.init(applicationContext)
-        pruneFeedbackFiles()
+        reportBuilder = FeedbackReportBuilder(applicationContext)
+        val builder = reportBuilder
+        exportWorker.execute { runCatching { builder.pruneFiles() } }
         setContentView(R.layout.activity_usage)
 
         findViewById<View>(R.id.btn_back).setOnClickListener { finish() }
@@ -32,6 +47,7 @@ class UsageActivity : ThemedActivity() {
                 .setTitle("清空使用记录")
                 .setMessage("确定要清空全部记录吗？")
                 .setPositiveButton("清空") { _, _ ->
+                    cancelExport()
                     UsageLog.clear()
                     render()
                 }
@@ -41,99 +57,67 @@ class UsageActivity : ThemedActivity() {
 
         // 导出反馈（v0.36.0）：版本/设备/使用记录/应用日志 打包成文本，走系统分享发给开发者
         findViewById<View>(R.id.btn_export).setOnClickListener {
-            runCatching {
-                val report = buildReport()
-                val send = Intent(Intent.ACTION_SEND).apply {
-                    type = "text/plain"
-                    putExtra(Intent.EXTRA_SUBJECT, "言出法随 问题反馈")
-                    if (FeedbackSharePolicy.needsFile(report)) {
-                        val dir = java.io.File(cacheDir, "speech_feedback").apply { mkdirs() }
-                        val name = "speech-feedback-${java.util.UUID.randomUUID().toString().replace("-", "")}.txt"
-                        java.io.File(dir, name).writeText(report, Charsets.UTF_8)
-                        val uri = android.net.Uri.Builder().scheme("content").authority("$packageName.feedback").appendPath(name).build()
-                        putExtra(Intent.EXTRA_STREAM, uri)
-                        putExtra(Intent.EXTRA_TEXT, "言出法随完整反馈见附件（含使用记录和诊断信息，不含录音）")
-                        clipData = android.content.ClipData.newRawUri("问题反馈", uri)
-                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                        pruneFeedbackFiles()
-                    } else putExtra(Intent.EXTRA_TEXT, report)
+            val owner = WeakReference(this)
+            val started = exportTask.start(builder::build) { result ->
+                owner.get()?.let { activity ->
+                    activity.findViewById<View>(R.id.btn_export).isEnabled = true
+                    if (activity.pageStarted && !activity.isFinishing && !activity.isDestroyed) {
+                        activity.deliverReport(result)
+                    }
                 }
-                startActivity(android.content.Intent.createChooser(send, "把反馈信息发送给开发者"))
-            }.onFailure {
-                Toast.makeText(this, "打不开分享，请稍后再试", Toast.LENGTH_SHORT).show()
             }
+            if (started) findViewById<View>(R.id.btn_export).isEnabled = false
         }
 
         render()
     }
 
-    private fun pruneFeedbackFiles() {
-        val dir = java.io.File(cacheDir, "speech_feedback")
-        val files = dir.listFiles()?.filter { it.isFile && FeedbackSharePolicy.validFilename(it.name) }
-            ?.sortedByDescending { it.lastModified() }.orEmpty()
-        val cutoff = System.currentTimeMillis() - FeedbackSharePolicy.RETENTION_MS
-        files.forEachIndexed { i, file -> if (i >= FeedbackSharePolicy.MAX_FILES || file.lastModified() < cutoff) file.delete() }
+    override fun onStart() {
+        super.onStart()
+        pageStarted = true
     }
 
-    /** 组装问题反馈文本：设备环境 + 内存画像 + 崩溃记录 + 使用记录 + 应用日志 + 系统错误日志 */
-    private fun buildReport(): String {
-        val sb = StringBuilder()
-        val df = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.CHINA)
-        sb.appendLine("===== 言出法随 · 问题反馈 =====")
-        sb.appendLine("导出时间：${df.format(Date())}")
-        runCatching {
-            val info = packageManager.getPackageInfo(packageName, 0)
-            sb.appendLine("版本：v${info.versionName} (${info.longVersionCode})")
-        }
-        sb.appendLine("设备：${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}")
-        sb.appendLine("系统：Android ${android.os.Build.VERSION.RELEASE} (${android.os.Build.VERSION.INCREMENTAL})")
-        // 内存画像（v0.43.0）：低配机诊断一线信息
-        runCatching { sb.appendLine("内存：${CrashCatcher.memoryLine(this)}") }
-        sb.appendLine()
-        sb.appendLine("---- 崩溃记录 ----")
-        val crashes = CrashCatcher.dumpAll(this)
-        sb.appendLine(crashes ?: "（无崩溃记录）")
-        sb.appendLine()
-        sb.appendLine("---- 使用记录（最近在前；机器听到=ASR 转写原文，箭头行=执行结果）----")
-        val all = UsageLog.all()
-        if (all.isEmpty()) {
-            sb.appendLine("（无记录）")
-        } else {
-            val f = SimpleDateFormat("MM-dd HH:mm:ss", Locale.CHINA)
-            all.asReversed().forEach { e ->
-                sb.appendLine("${f.format(Date(e.time))}  ${e.text.ifBlank { "（未触发操作）" }}${if (e.heard.isNotBlank()) "  ｜原文：${e.heard}" else ""}${if (e.decisionLabel.isNotBlank()) "  ｜复核：${e.decisionLabel}" else ""}${if (e.audioDecision.isNotBlank()) "  ｜二审详情：${e.audioDecision}" else ""}")
+    override fun onStop() {
+        pageStarted = false
+        cancelExport()
+        super.onStop()
+    }
+
+    override fun onDestroy() {
+        exportTask.close()
+        super.onDestroy()
+    }
+
+    private fun cancelExport() {
+        exportTask.cancel()
+        findViewById<View>(R.id.btn_export).isEnabled = true
+    }
+
+    private fun deliverReport(result: Result<FeedbackReport>) {
+        result.onSuccess { report ->
+            runCatching {
+                val send = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_SUBJECT, "言出法随 问题反馈")
+                    val file = report.attachment
+                    if (file != null) {
+                        val uri = android.net.Uri.Builder().scheme("content").authority("$packageName.feedback").appendPath(file.name).build()
+                        putExtra(Intent.EXTRA_STREAM, uri)
+                        putExtra(Intent.EXTRA_TEXT, "言出法随完整反馈见附件（含使用记录和诊断信息，不含录音）")
+                        clipData = android.content.ClipData.newRawUri("问题反馈", uri)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    } else putExtra(Intent.EXTRA_TEXT, report.text)
+                }
+                startActivity(Intent.createChooser(send, "把反馈信息发送给开发者"))
+            }.onFailure {
+                exportWorker.execute { FeedbackFiles.discard(report) }
+                showExportFailure()
             }
-        }
-        sb.appendLine()
-        sb.appendLine("---- 高频二审账目（用户标记的意图；未标记不计正确率；不含录音或声学特征）----")
-        sb.appendLine(SpeechAudit.export(all).toString())
-        sb.appendLine()
-        sb.appendLine("---- 诊断事件（关键事件环形缓冲，logcat 被冲掉后的真相来源）----")
-        sb.appendLine(DiagnosticsHelper.dumpEvents())
-        sb.appendLine()
-        sb.appendLine("---- 应用日志（最近 400 行）----")
-        runCatching {
-            val p = Runtime.getRuntime().exec(arrayOf("logcat", "-d", "-t", "400", "-s", "VoiceControl"))
-            val out = p.inputStream.bufferedReader().readText()
-            sb.append(if (out.isBlank()) "（暂无日志）" else out)
-        }.onFailure {
-            sb.appendLine("（日志读取失败：${it.message}）")
-        }
-        sb.appendLine()
-        sb.appendLine("---- 系统错误日志（崩溃/错误，最近 200 行）----")
-        runCatching {
-            // -b crash = Java/native 崩溃专用缓冲；*:E = 全局错误级（含低内存杀进程记录）
-            val p = Runtime.getRuntime().exec(arrayOf("logcat", "-d", "-b", "crash", "-t", "200"))
-            val crash = p.inputStream.bufferedReader().readText()
-            sb.append(if (crash.isBlank()) "（无）" else crash)
-            sb.appendLine()
-            val p2 = Runtime.getRuntime().exec(arrayOf("logcat", "-d", "-t", "200", "*:E"))
-            val errs = p2.inputStream.bufferedReader().readText()
-            sb.append(if (errs.isBlank()) "（无错误级日志）" else errs)
-        }.onFailure {
-            sb.appendLine("（系统日志读取失败：${it.message}）")
-        }
-        return sb.toString()
+        }.onFailure { showExportFailure() }
+    }
+
+    private fun showExportFailure() {
+        Toast.makeText(this, "打不开分享，请稍后再试", Toast.LENGTH_SHORT).show()
     }
 
     private fun render() {
