@@ -140,9 +140,6 @@ open class VoiceControlService : AccessibilityService() {
         /** 更新顶部横条文字 */
         fun updateBar(text: String) = instance?.doUpdateBar(text)
 
-        /** 摇移应答：胶囊朝拖动方向微移后弹回（v0.25.3，替代摇移的流光） */
-        fun nudgeIslandToward(dx: Float, dy: Float) = instance?.doNudgeIsland(dx, dy)
-
         /** 显示编号网格（第①步：给屏幕上可点击元素标数字） */
         fun showLabels() = instance?.doShowLabels()
 
@@ -449,10 +446,6 @@ open class VoiceControlService : AccessibilityService() {
 
     private fun doUpdateBar(text: String) {
         islandBar?.update(text)
-    }
-
-    private fun doNudgeIsland(dx: Float, dy: Float) {
-        islandBar?.nudgeToward(dx, dy)
     }
 
     // ===== 蓝色圆球动画 =====
@@ -1243,9 +1236,7 @@ open class VoiceControlService : AccessibilityService() {
     private fun standardScroll(vertical: Boolean, forward: Boolean): Boolean =
         performScrollAction(vertical, forward)
 
-    /** 摇移的反馈（v0.25.3 重设计）：**不做光效**——小步轻挪的内容运动本身就是反馈，
-     *  叠加流光属于「反馈音量超过动作本身」（用户实测随意、一闪而过）。
-     *  iOS 式做法：让系统元素轻轻「应答」——顶部胶囊朝拖动方向微移 8dp 再弹回。 */
+    /** 摇移只移动页面；2026-10-15 用户要求取消顶部胶囊随方向弹动。 */
     private fun nudgeCommand(vertical: Boolean, forward: Boolean): Boolean {
         val pkg = rootInActiveWindow?.packageName?.toString()
         if (pkg == null || pkg == "com.android.systemui" || pkg == "android" || pkg == "com.miui.home") {
@@ -1256,10 +1247,11 @@ open class VoiceControlService : AccessibilityService() {
         val t0 = SystemClock.elapsedRealtime()
         val dispatched = nudge(dx, dy)
         if (!dispatched) return false
-        nudgeIslandToward(dx, dy)
         // 摇移是精准命令，绝不跳页兜底：页面没动就让它安静（用户看得见），事件到达则清除拦截计数
-        SystemClock.sleep(NUDGE_GESTURE_MS + 200)
-        if (lastScrollEventAt > t0) gestureNoEventStreak = 0
+        // 2026-10-15：滚动事件也由主线程处理，不能 sleep 挡住它；延后观察，不追加手势。
+        mainHandler.postDelayed({
+            if (lastScrollEventAt > t0) gestureNoEventStreak = 0
+        }, NUDGE_GESTURE_MS + 200)
         return true
     }
 
